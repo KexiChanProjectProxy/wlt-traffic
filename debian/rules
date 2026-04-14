@@ -14,10 +14,15 @@ build:
 	@echo "Building traffic-count..."
 	mkdir -p $(INSTALL_DIR)/usr/bin
 	mkdir -p $(INSTALL_DIR)/usr/lib/traffic-count/bpf
+	mkdir -p $(INSTALL_DIR)/etc/traffic-count
+	mkdir -p $(INSTALL_DIR)/lib/systemd/system
 	mkdir -p $(INSTALL_DIR)/DEBIAN
 	@# Copy eBPF source files (will be compiled on target using target's libbpf-dev)
 	cp $(CURDIR)/bpf/*.c $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
 	cp $(CURDIR)/bpf/*.h $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
+	@# Copy config and systemd unit
+	cp $(CURDIR)/examples/config.json $(INSTALL_DIR)/etc/traffic-count/config.json
+	cp $(CURDIR)/examples/traffic-count.service $(INSTALL_DIR)/lib/systemd/system/traffic-count.service
 	@# Build Go binary (loads external eBPF object at runtime)
 	go build -o $(INSTALL_DIR)/usr/bin/traffic-count \
 		-ldflags="-s -w" \

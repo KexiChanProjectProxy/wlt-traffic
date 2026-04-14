@@ -1,2 +1,4 @@
 usr/bin/traffic-count
 usr/lib/traffic-count/traffic_count_bpfel.o
+etc/traffic-count/config.json etc/traffic-count/config.json
+lib/systemd/system/traffic-count.service lib/systemd/system/traffic-count.service
