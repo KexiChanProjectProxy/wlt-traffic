@@ -1,15 +1,12 @@
 #!/usr/bin/make -f
 
 # Traffic-count Debian packaging rules
-# Builds Go binary and packages eBPF sources for runtime compilation
+# Ships C source + Go binary; eBPF compiled on target via postinst
+# using target's libbpf-dev package headers
 
 CURDIR := $(shell pwd)
 BUILD_DIR := $(CURDIR)/debian/tmp
 INSTALL_DIR := $(BUILD_DIR)
-
-# BPF headers from cilium ebpf module (copy to debian/tmp during build)
-BPF_HEADERS_DIR := $(CURDIR)/vendor/github.com/cilium/ebpf/examples/headers
-BPF_HEADERS_DEST := $(INSTALL_DIR)/usr/lib/traffic-count/bpf-headers
 
 .PHONY: build install clean binary binary-arm64
 
@@ -17,22 +14,11 @@ build:
 	@echo "Building traffic-count..."
 	mkdir -p $(INSTALL_DIR)/usr/bin
 	mkdir -p $(INSTALL_DIR)/usr/lib/traffic-count/bpf
-	mkdir -p $(INSTALL_DIR)/usr/lib/traffic-count/bpf-headers
 	mkdir -p $(INSTALL_DIR)/DEBIAN
-	@# Copy BPF source files
+	@# Copy eBPF source files (will be compiled on target using target's libbpf-dev)
 	cp $(CURDIR)/bpf/*.c $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
 	cp $(CURDIR)/bpf/*.h $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
-	@# Copy BPF headers (for postinst compilation)
-	@if [ -d "$(BPF_HEADERS_DIR)" ]; then \
-		cp $(BPF_HEADERS_DIR)/*.h $(INSTALL_DIR)/usr/lib/traffic-count/bpf-headers/; \
-		cp $(BPF_HEADERS_DIR)/*.h $(INSTALL_DIR)/usr/lib/traffic-count/bpf/; \
-	fi
-	@# Pre-compile eBPF object for this architecture (optional - postinst will recompile)
-	clang -target bpf -c -O2 -g -I$(CURDIR)/bpf \
-		-I$(INSTALL_DIR)/usr/lib/traffic-count/bpf-headers \
-		-o $(INSTALL_DIR)/usr/lib/traffic-count/traffic_count_bpfel.o \
-		$(CURDIR)/bpf/ingress.c 2>/dev/null || true
-	@# Build Go binary (without bpf2go - uses external eBPF object)
+	@# Build Go binary (loads external eBPF object at runtime)
 	go build -o $(INSTALL_DIR)/usr/bin/traffic-count \
 		-ldflags="-s -w" \
 		./cmd/traffic-count
