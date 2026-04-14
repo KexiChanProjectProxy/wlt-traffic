@@ -1,31 +1,46 @@
 #!/usr/bin/make -f
 
-BUILD_DIR := debian/tmp
+# Traffic-count Debian packaging rules
+# Builds Go binary and packages eBPF sources for runtime compilation
+
+CURDIR := $(shell pwd)
+BUILD_DIR := $(CURDIR)/debian/tmp
 INSTALL_DIR := $(BUILD_DIR)
 
-.PHONY: build install clean
+# BPF headers from cilium ebpf module (copy to debian/tmp during build)
+BPF_HEADERS_DIR := $(CURDIR)/vendor/github.com/cilium/ebpf/examples/headers
+BPF_HEADERS_DEST := $(INSTALL_DIR)/usr/lib/traffic-count/bpf-headers
+
+.PHONY: build install clean binary binary-arm64
 
 build:
-	@# Build eBPF object for the current architecture (compiled on target via postinst)
-	@# For local build verification, compile the object now
-	mkdir -p $(INSTALL_DIR)/usr/lib/traffic-count/bpf
+	@echo "Building traffic-count..."
 	mkdir -p $(INSTALL_DIR)/usr/bin
-	clang -target bpf -O2 -g -I$(CURDIR)/bpf \
+	mkdir -p $(INSTALL_DIR)/usr/lib/traffic-count/bpf
+	mkdir -p $(INSTALL_DIR)/usr/lib/traffic-count/bpf-headers
+	mkdir -p $(INSTALL_DIR)/DEBIAN
+	@# Copy BPF source files
+	cp $(CURDIR)/bpf/*.c $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
+	cp $(CURDIR)/bpf/*.h $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
+	@# Copy BPF headers (for postinst compilation)
+	@if [ -d "$(BPF_HEADERS_DIR)" ]; then \
+		cp $(BPF_HEADERS_DIR)/*.h $(INSTALL_DIR)/usr/lib/traffic-count/bpf-headers/; \
+		cp $(BPF_HEADERS_DIR)/*.h $(INSTALL_DIR)/usr/lib/traffic-count/bpf/; \
+	fi
+	@# Pre-compile eBPF object for this architecture (optional - postinst will recompile)
+	clang -target bpf -c -O2 -g -I$(CURDIR)/bpf \
+		-I$(INSTALL_DIR)/usr/lib/traffic-count/bpf-headers \
 		-o $(INSTALL_DIR)/usr/lib/traffic-count/traffic_count_bpfel.o \
-		$(CURDIR)/bpf/ingress.c || true
+		$(CURDIR)/bpf/ingress.c 2>/dev/null || true
 	@# Build Go binary (without bpf2go - uses external eBPF object)
 	go build -o $(INSTALL_DIR)/usr/bin/traffic-count \
 		-ldflags="-s -w" \
 		./cmd/traffic-count
 
 install: build
-	@# Install eBPF source for postinst compilation on target
-	mkdir -p $(INSTALL_DIR)/usr/lib/traffic-count/bpf
-	cp $(CURDIR)/bpf/*.c $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
-	cp $(CURDIR)/bpf/*.h $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
+	@echo "Installing to debian/tmp..."
 
 clean:
-	dh_clean || true
 	rm -rf $(BUILD_DIR)
 
 binary: install
