@@ -27,7 +27,7 @@ type Status struct {
 	AttachErrors       []string
 }
 
-func NewService(cfg *config.Config) *Service {
+func NewService(cfg *config.Config, ebpfPath string) *Service {
 	return &Service{
 		cfg: cfg,
 		status: &Status{
@@ -39,7 +39,7 @@ func NewService(cfg *config.Config) *Service {
 			LastFlushTimestamp: 0,
 			DatabasePath:       cfg.DatabasePath,
 		},
-		loader:  ebpf.NewLoader(""),
+		loader:  ebpf.NewLoader(ebpfPath),
 		manager: ebpf.NewAttachmentManager(),
 	}
 }

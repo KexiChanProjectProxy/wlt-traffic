@@ -103,7 +103,7 @@ func (h *Harness) SetupInterface(ifaceName string) error {
 func (h *Harness) StartDaemon(ctx context.Context) (*DaemonHandle, error) {
 	cfg := h.config
 
-	svc := runtime.NewService(cfg)
+	svc := runtime.NewService(cfg, "")
 	if err := svc.Start(); err != nil {
 		return nil, fmt.Errorf("starting service: %w", err)
 	}

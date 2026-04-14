@@ -1,0 +1,24 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Compile eBPF programs on target system
+        CLANG=$(command -v clang || true)
+        if [ -z "$CLANG" ]; then
+            echo "WARNING: clang not found, traffic-count will run in mock mode" >&2
+        else
+            echo "Compiling eBPF programs for traffic-count..."
+            clang -target bpf -O2 -g \
+                -I/usr/lib/traffic-count/bpf \
+                -o /usr/lib/traffic-count/traffic_count_bpfel.o \
+                /usr/lib/traffic-count/bpf/ingress.c || {
+                echo "WARNING: eBPF compilation failed, traffic-count will run in mock mode" >&2
+            }
+            echo "eBPF programs compiled successfully"
+        fi
+    ;;
+esac
+
+# Dh_Lintian needs this
+exit 0

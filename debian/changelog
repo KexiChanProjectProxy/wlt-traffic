@@ -1,0 +1,5 @@
+traffic-count (1.0.0) stable; urgency=medium
+
+  * Initial release with eBPF-based traffic accounting
+
+ -- KexiChan Project <kexi@example.com>  Tue, 14 Apr 2026 00:00:00 +0000

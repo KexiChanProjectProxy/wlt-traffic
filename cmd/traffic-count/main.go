@@ -20,7 +20,8 @@ import (
 )
 
 var (
-	configPath = flag.String("config", "", "Path to configuration file")
+	configPath     = flag.String("config", "", "Path to configuration file")
+	ebpfObjectPath = flag.String("ebpf-object", "", "Path to eBPF object file (default: /usr/lib/traffic-count/traffic_count_bpfel.o)")
 )
 
 func main() {
@@ -51,7 +52,7 @@ func main() {
 		}
 	}
 
-	svc := runtime.NewService(cfg)
+	svc := runtime.NewService(cfg, *ebpfObjectPath)
 	if err := svc.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: failed to start service: %v\n", err)
 		os.Exit(1)

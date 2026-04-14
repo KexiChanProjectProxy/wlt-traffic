@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove|purge)
+        rm -f /usr/lib/traffic-count/traffic_count_bpfel.o
+        ;;
+esac
+
+exit 0

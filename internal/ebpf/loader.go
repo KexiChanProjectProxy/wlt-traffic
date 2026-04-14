@@ -3,13 +3,12 @@ package ebpf
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/rlimit"
 )
 
-var DefaultObjectPath = "/home/kexi/traffic-count/bin/traffic_count_bpfel.o"
+var DefaultObjectPath = "/usr/lib/traffic-count/traffic_count_bpfel.o"
 
 type Loader struct {
 	objPath    string
@@ -94,31 +93,11 @@ func (l *Loader) LoadSpec() (*ebpf.CollectionSpec, error) {
 }
 
 func (l *Loader) isMockMode() bool {
-	if path, err := execLook("clang"); err == nil && path != "" {
-		return false
-	}
-	if info, err := os.Stat(l.objPath); err == nil && info.Size() > 100 {
+	info, err := os.Stat(l.objPath)
+	if err != nil {
 		return true
 	}
-	return true
-}
-
-func execLook(name string) (string, error) {
-	path, err := execLookPath(name)
-	if err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
-func execLookPath(name string) (string, error) {
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		full := filepath.Join(dir, name)
-		if info, err := os.Stat(full); err == nil && info.Mode()&0111 != 0 {
-			return full, nil
-		}
-	}
-	return "", fmt.Errorf("%s not found in PATH", name)
+	return info.Size() <= 100
 }
 
 func (l *Loader) mockSpec() *ebpf.CollectionSpec {

@@ -1,0 +1,15 @@
+Source: traffic-count
+Section: net
+Priority: optional
+Maintainer: KexiChan Project <kexi@example.com>
+Build-Depends: clang (>= 12.0.0), llvm (>= 12.0.0), linux-libc-dev (>= 5.10), go (>= 1.21)
+Standards-Version: 4.6.2
+Homepage: https://github.com/KexiChanProjectProxy/wlt-traffic
+
+Package: traffic-count
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, clang (>= 12.0.0), llvm (>= 12.0.0), linux-libc-dev (>= 5.10)
+Description: MAC-level traffic accounting service using eBPF TC
+ traffic-count attaches eBPF programs to network interfaces to capture
+ per-MAC ingress/egress byte and packet counters. Counters are
+ periodically flushed to SQLite for persistence.

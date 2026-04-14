@@ -1,0 +1,35 @@
+#!/usr/bin/make -f
+
+BUILD_DIR := debian/tmp
+INSTALL_DIR := $(BUILD_DIR)
+
+.PHONY: build install clean
+
+build:
+	@# Build eBPF object for the current architecture (compiled on target via postinst)
+	@# For local build verification, compile the object now
+	mkdir -p $(INSTALL_DIR)/usr/lib/traffic-count/bpf
+	mkdir -p $(INSTALL_DIR)/usr/bin
+	clang -target bpf -O2 -g -I$(CURDIR)/bpf \
+		-o $(INSTALL_DIR)/usr/lib/traffic-count/traffic_count_bpfel.o \
+		$(CURDIR)/bpf/ingress.c || true
+	@# Build Go binary (without bpf2go - uses external eBPF object)
+	go build -o $(INSTALL_DIR)/usr/bin/traffic-count \
+		-ldflags="-s -w" \
+		./cmd/traffic-count
+
+install: build
+	@# Install eBPF source for postinst compilation on target
+	mkdir -p $(INSTALL_DIR)/usr/lib/traffic-count/bpf
+	cp $(CURDIR)/bpf/*.c $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
+	cp $(CURDIR)/bpf/*.h $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
+
+clean:
+	dh_clean || true
+	rm -rf $(BUILD_DIR)
+
+binary: install
+	dpkg-deb --build $(BUILD_DIR) ../traffic-count_1.0.0_amd64.deb
+
+binary-arm64: install
+	dpkg-deb --build --arch=arm64 $(BUILD_DIR) ../traffic-count_1.0.0_arm64.deb

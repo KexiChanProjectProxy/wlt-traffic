@@ -12,7 +12,7 @@ func TestNewService(t *testing.T) {
 	cfg.Interfaces = []string{"lo"}
 	cfg.DatabasePath = "/tmp/test.db"
 
-	svc := NewService(cfg)
+	svc := NewService(cfg, "")
 
 	if svc == nil {
 		t.Fatal("NewService returned nil")
@@ -130,7 +130,7 @@ func TestServiceGetStatus(t *testing.T) {
 }
 
 func TestServiceUpdateFromResult(t *testing.T) {
-	svc := NewService(config.New())
+	svc := NewService(config.New(), "")
 	svc.status.Mode = bootstrap.ModeHealthy
 	svc.status.TotalInterfaces = 0
 	svc.status.AttachedInterfaces = nil
@@ -163,7 +163,7 @@ func TestServiceUpdateFromResult(t *testing.T) {
 }
 
 func TestServiceGetAttachmentManager(t *testing.T) {
-	svc := NewService(config.New())
+	svc := NewService(config.New(), "")
 	manager := svc.GetAttachmentManager()
 	if manager == nil {
 		t.Error("GetAttachmentManager() returned nil")
@@ -171,7 +171,7 @@ func TestServiceGetAttachmentManager(t *testing.T) {
 }
 
 func TestServiceGetTrafficMap(t *testing.T) {
-	svc := NewService(config.New())
+	svc := NewService(config.New(), "")
 	trafficMap := svc.GetTrafficMap()
 	if trafficMap == nil {
 		t.Log("GetTrafficMap() returned nil (expected in mock/empty manager mode)")
