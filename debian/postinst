@@ -6,6 +6,9 @@ case "$1" in
         ARCH=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
         echo "Detected architecture: $ARCH"
 
+        # Ensure runtime directories exist
+        mkdir -p /var/lib/traffic-count /run/traffic-count
+
         # Set include paths for Debian multiarch layout
         case "$ARCH" in
             amd64)

@@ -4,15 +4,16 @@ After=network.target
 
 [Service]
 Type=simple
-User=traffic-count
-Group=traffic-count
-ExecStart=/usr/bin/traffic-count --config /etc/traffic-count/config.json
+# Run as root; eBPF TC attachment requires CAP_BPF + CAP_NET_ADMIN
+# AmbientCapabilities grants these without full root privilege escalation
+AmbientCapabilities=CAP_BPF CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN
+NoNewPrivileges=false
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65536
 
 # Hardening
-NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadOnlyPaths=/etc/traffic-count
