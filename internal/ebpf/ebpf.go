@@ -21,7 +21,7 @@ type TrafficCounter struct {
 var TrafficMapSpec = ebpf.MapSpec{
 	Name:       "traffic_map",
 	Type:       ebpf.Hash,
-	KeySize:    10,
+	KeySize:    12,
 	ValueSize:  48,
 	MaxEntries: 262144,
 }
