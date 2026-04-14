@@ -9,6 +9,7 @@ Type=simple
 AmbientCapabilities=CAP_BPF CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN
 NoNewPrivileges=false
+ExecStart=/usr/bin/traffic-count --config /etc/traffic-count/config.json
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=65536
