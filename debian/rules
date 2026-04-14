@@ -20,6 +20,21 @@ build:
 	@# Copy eBPF source files (will be compiled on target using target's libbpf-dev)
 	cp $(CURDIR)/bpf/*.c $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
 	cp $(CURDIR)/bpf/*.h $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
+	@# Copy DEBIAN control and maintainer scripts into package root
+	@# Create DEBIAN control file with all required fields
+	echo "Package: traffic-count" > $(INSTALL_DIR)/DEBIAN/control
+	echo "Architecture: any" >> $(INSTALL_DIR)/DEBIAN/control
+	echo "Depends: libc6 (>= 2.17), libbpf-dev, clang (>= 12.0.0), llvm (>= 12.0.0), linux-libc-dev (>= 5.10)" >> $(INSTALL_DIR)/DEBIAN/control
+	echo "Maintainer: KexiChan Project <kexi@example.com>" >> $(INSTALL_DIR)/DEBIAN/control
+	echo "Version: 1.0.0" >> $(INSTALL_DIR)/DEBIAN/control
+	echo "Description: MAC-level traffic accounting service using eBPF TC" >> $(INSTALL_DIR)/DEBIAN/control
+	echo " traffic-count attaches eBPF programs to network interfaces to capture" >> $(INSTALL_DIR)/DEBIAN/control
+	echo " per-MAC ingress/egress byte and packet counters. Counters are" >> $(INSTALL_DIR)/DEBIAN/control
+	echo " periodically flushed to SQLite for persistence." >> $(INSTALL_DIR)/DEBIAN/control
+	echo "" >> $(INSTALL_DIR)/DEBIAN/control
+	cp $(CURDIR)/debian/postinst $(INSTALL_DIR)/DEBIAN/postinst
+	cp $(CURDIR)/debian/prerm $(INSTALL_DIR)/DEBIAN/prerm
+	chmod 755 $(INSTALL_DIR)/DEBIAN/postinst $(INSTALL_DIR)/DEBIAN/prerm
 	@# Copy config and systemd unit
 	cp $(CURDIR)/examples/config.json $(INSTALL_DIR)/etc/traffic-count/config.json
 	cp $(CURDIR)/examples/traffic-count.service $(INSTALL_DIR)/lib/systemd/system/traffic-count.service
@@ -34,8 +49,42 @@ install: build
 clean:
 	rm -rf $(BUILD_DIR)
 
-binary: install
+binary:
+	ARCH=amd64 sh -c '$(MAKE) $(MFLAGS) -f $(CURDIR)/debian/rules do-build'
 	dpkg-deb --build $(BUILD_DIR) ../traffic-count_1.0.0_amd64.deb
 
-binary-arm64: install
-	dpkg-deb --build --arch=arm64 $(BUILD_DIR) ../traffic-count_1.0.0_arm64.deb
+binary-arm64:
+	ARCH=arm64 sh -c '$(MAKE) $(MFLAGS) -f $(CURDIR)/debian/rules do-build'
+	dpkg-deb --build $(BUILD_DIR) ../traffic-count_1.0.0_arm64.deb
+
+do-build:
+	@echo "Building traffic-count..."
+	mkdir -p $(INSTALL_DIR)/usr/bin
+	mkdir -p $(INSTALL_DIR)/usr/lib/traffic-count/bpf
+	mkdir -p $(INSTALL_DIR)/etc/traffic-count
+	mkdir -p $(INSTALL_DIR)/lib/systemd/system
+	mkdir -p $(INSTALL_DIR)/DEBIAN
+	@# Copy eBPF source files (will be compiled on target using target's libbpf-dev)
+	cp $(CURDIR)/bpf/*.c $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
+	cp $(CURDIR)/bpf/*.h $(INSTALL_DIR)/usr/lib/traffic-count/bpf/
+	@# Create DEBIAN control file with all required fields
+	echo "Package: traffic-count" > $(INSTALL_DIR)/DEBIAN/control
+	echo "Architecture: $(ARCH)" >> $(INSTALL_DIR)/DEBIAN/control
+	echo "Depends: libc6 (>= 2.17), libbpf-dev, clang (>= 12.0.0), llvm (>= 12.0.0), linux-libc-dev (>= 5.10)" >> $(INSTALL_DIR)/DEBIAN/control
+	echo "Maintainer: KexiChan Project <kexi@example.com>" >> $(INSTALL_DIR)/DEBIAN/control
+	echo "Version: 1.0.0" >> $(INSTALL_DIR)/DEBIAN/control
+	echo "Description: MAC-level traffic accounting service using eBPF TC" >> $(INSTALL_DIR)/DEBIAN/control
+	echo " traffic-count attaches eBPF programs to network interfaces to capture" >> $(INSTALL_DIR)/DEBIAN/control
+	echo " per-MAC ingress/egress byte and packet counters. Counters are" >> $(INSTALL_DIR)/DEBIAN/control
+	echo " periodically flushed to SQLite for persistence." >> $(INSTALL_DIR)/DEBIAN/control
+	echo "" >> $(INSTALL_DIR)/DEBIAN/control
+	cp $(CURDIR)/debian/postinst $(INSTALL_DIR)/DEBIAN/postinst
+	cp $(CURDIR)/debian/prerm $(INSTALL_DIR)/DEBIAN/prerm
+	chmod 755 $(INSTALL_DIR)/DEBIAN/postinst $(INSTALL_DIR)/DEBIAN/prerm
+	@# Copy config and systemd unit
+	cp $(CURDIR)/examples/config.json $(INSTALL_DIR)/etc/traffic-count/config.json
+	cp $(CURDIR)/examples/traffic-count.service $(INSTALL_DIR)/lib/systemd/system/traffic-count.service
+	@# Build Go binary for target architecture
+	GOARCH=$(ARCH) go build -o $(INSTALL_DIR)/usr/bin/traffic-count \
+		-ldflags="-s -w" \
+		./cmd/traffic-count
