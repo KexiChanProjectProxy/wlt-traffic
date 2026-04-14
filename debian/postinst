@@ -3,22 +3,41 @@ set -e
 
 case "$1" in
     configure)
-        # Compile eBPF programs on target system
-        CLANG=$(command -v clang || true)
-        if [ -z "$CLANG" ]; then
-            echo "WARNING: clang not found, traffic-count will run in mock mode" >&2
-        else
+        ARCH=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
+        echo "Detected architecture: $ARCH"
+
+        # Create asm symlink for Debian multiarch layout
+        case "$ARCH" in
+            amd64)
+                ASM_PATH="/usr/include/x86_64-linux-gnu/asm"
+                ;;
+            arm64)
+                ASM_PATH="/usr/include/aarch64-linux-gnu/asm"
+                ;;
+            *)
+                ASM_PATH=""
+                ;;
+        esac
+
+        if [ -n "$ASM_PATH" ] && [ -d "$ASM_PATH" ] && [ ! -L "/usr/include/asm" ]; then
+            ln -s "$ASM_PATH" /usr/include/asm || true
+        fi
+
+        # Compile eBPF program on target system
+        if command -v clang >/dev/null 2>&1; then
             echo "Compiling eBPF programs for traffic-count..."
-            clang -target bpf -O2 -g \
-                -I/usr/lib/traffic-count/bpf \
+            clang -target bpf -c -O2 -g \
+                -I/usr/include \
+                -I/usr/include/asm-generic \
                 -o /usr/lib/traffic-count/traffic_count_bpfel.o \
-                /usr/lib/traffic-count/bpf/ingress.c || {
+                /usr/lib/traffic-count/bpf/ingress.c 2>&1 || {
                 echo "WARNING: eBPF compilation failed, traffic-count will run in mock mode" >&2
             }
             echo "eBPF programs compiled successfully"
+        else
+            echo "WARNING: clang not found, traffic-count will run in mock mode" >&2
         fi
     ;;
 esac
 
-# Dh_Lintian needs this
 exit 0
