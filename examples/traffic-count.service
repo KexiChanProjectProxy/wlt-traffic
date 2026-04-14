@@ -1,0 +1,27 @@
+[Unit]
+Description=mac-traffic-ebpf traffic counting service
+After=network.target
+
+[Service]
+Type=simple
+User=traffic-count
+Group=traffic-count
+ExecStart=/usr/local/bin/traffic-count --config /etc/traffic-count/config.json
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/traffic-count
+ReadWritePaths=/var/lib/traffic-count
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=traffic-count
+
+[Install]
+WantedBy=multi-user.target

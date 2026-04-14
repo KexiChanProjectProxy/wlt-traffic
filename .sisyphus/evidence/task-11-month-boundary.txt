@@ -1,0 +1,65 @@
+# Task 11: Month Boundary Behavior Evidence
+
+## Test Execution Summary
+
+Window query tests from Task 10 (e2e_verification_test.go):
+- TestMonthWindowVerification: PASS (covers month boundary behavior)
+- TestDeterministicWindowBoundaries: PASS
+
+## Month Window Implementation
+
+The month window query in internal/http/http.go:
+
+```go
+func (s *Server) queryMonth(...) {
+    now := time.Now().UTC()
+    startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+    end := storage.CurrentDateUTC()
+    start := storage.FormatDateUTC(startOfMonth)
+    return s.queryDateRange(start, end, ...)
+}
+```
+
+- start = first day of current calendar month at 00:00:00 UTC
+- end = today (current UTC date)
+- Query uses: ListDaily(ctx, start, end, interfaceFilter) with date_utc >= start AND date_utc <= end
+
+## UTC Boundary Semantics
+
+- time.Now().UTC() provides current moment in UTC
+- time.Date(year, month, 1, 0, 0, 0, 0, time.UTC) creates start-of-month at midnight UTC
+- FormatDateUTC converts to YYYY-MM-DD string for SQL comparison
+- CurrentDateUTC returns today's date as YYYY-MM-DD in UTC
+- SQL comparison is string-based lexicographic on YYYY-MM-DD format, which matches chronological order
+
+## Month Boundary Test Coverage
+
+TestDeterministicWindowBoundaries (from e2e_verification_test.go):
+- Verifies month window returns only current calendar month records
+- Verifies previous month's records are excluded
+- Uses UTC time.Date for start-of-month calculation
+
+Example (2026-04-13):
+- month window: start=2026-04-01, end=2026-04-13
+- Query: SELECT ... FROM mac_traffic_daily WHERE date_utc >= '2026-04-01' AND date_utc <= '2026-04-13'
+- This correctly includes all April 2026 records through today
+
+## Flush Loop Rollover Behavior
+
+In internal/runtime/flush.go Flush():
+- currentDateUTC := storage.CurrentDateUTC() (called once at start of flush)
+- Checkpoint date comparison: cp.DateUTC == currentDateUTC
+- If same day: compute delta from checkpoint
+- If new day: use raw counters as delta (counter wrap handled)
+- persistAll writes checkpoint with currentDateUTC, upserts to totals, upserts to daily bucket
+
+This ensures:
+1. New UTC day = new daily bucket automatically
+2. No cross-day accumulation in same bucket
+3. Checkpoint date tracks which day the counters are from
+
+## Files Involved
+
+- internal/http/http.go: queryMonth() with UTC start-of-month calculation
+- internal/runtime/flush.go: CurrentDateUTC() used for rollover detection
+- internal/storage/storage.go: FormatDateUTC, CurrentDateUTC, PruneCutoffDate

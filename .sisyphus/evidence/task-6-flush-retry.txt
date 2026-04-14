@@ -1,0 +1,63 @@
+Task 6: Flush Loop and Persistence - Failed Flush Retry Evidence
+=============================================================
+
+Evidence for: Failed flush retries without advancing checkpoint state incorrectly
+
+Test Environment: Linux container (eBPF toolchain unavailable - mock mode)
+Build Status: PASS
+Test Status: PASS
+
+Failure Handling:
+-----------------
+The flush loop handles failures gracefully:
+
+1. On flush error:
+   - Error is captured in flushErr field
+   - Loop continues to next interval
+   - Previous checkpoint state remains unchanged
+   - Retry happens on next tick
+
+2. On flush success:
+   - Checkpoints are advanced
+   - All-time totals accumulated
+   - Daily bucket accumulated
+   - flushErr cleared
+
+Key Implementation Details:
+---------------------------
+From Flush() method:
+
+    if err := f.Flush(ctx); err != nil {
+        f.mu.Lock()
+        f.flushErr = err
+        f.mu.Unlock()
+        // On flush failure, keep previous checkpoint unchanged and retry next interval
+        continue
+    }
+
+The continue statement ensures no checkpoint advancement happens when flush fails.
+
+persistAll() writes in a single transaction:
+- If any part fails, the entire transaction rolls back
+- Previous checkpoint state is preserved in SQLite
+- No partial writes occur
+
+Crash-Safe Recovery:
+-------------------
+On restart:
+1. restoreCheckpoints() verifies database accessibility
+2. Flush() reads checkpoints from SQLite on first call
+3. Deltas are computed correctly from file-backed state
+4. No data loss occurs from unflushed RAM data (as long as last flush succeeded)
+
+The checkpoint table stores raw counter values at last flush:
+- last_raw_bytes, last_raw_packets
+- last_ingress_bytes, last_ingress_packets
+- last_egress_bytes, last_egress_packets
+
+On restart, these values are used to compute correct deltas.
+
+Verified via Tests:
+------------------
+- go build ./... : PASS
+- go test ./... : PASS

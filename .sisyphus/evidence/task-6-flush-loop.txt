@@ -1,0 +1,53 @@
+Task 6: Flush Loop and Persistence - Periodic Flush Evidence
+============================================================
+
+Evidence for: Periodic flush updates sqlite totals and checkpoints
+
+Test Environment: Linux container (eBPF toolchain unavailable - mock mode)
+Build Status: PASS
+Test Status: PASS
+
+Flush Loop Implementation:
+--------------------------
+The FlushLoop struct provides periodic persistence of eBPF counters to SQLite:
+
+1. NewFlushLoop(repo, trafficMap, intervalSec) creates a new flush loop
+2. Start(ctx) begins the periodic flush loop, restoring checkpoints first
+3. Flush(ctx) reads counters from eBPF map, computes deltas, persists to SQLite
+4. Stop(ctx) gracefully stops and performs a final flush
+
+Flush Interval:
+- Default: 10 seconds (from config.FlushInterval)
+- Configurable via intervalSec parameter
+
+Delta Computation:
+------------------
+The flush loop computes deltas from the last persisted checkpoint:
+
+1. For same day (checkpoint.date_utc == current_date_utc):
+   - delta = current_counters - checkpoint.raw_values
+   - This ensures no double-counting on repeated flushes
+
+2. For new day or no checkpoint:
+   - delta = current_counters (entire value)
+   - Handles UTC rollover and fresh counter initialization
+
+Transaction Behavior:
+---------------------
+Each flush for a given (interface, MAC) writes three things atomically:
+1. Collector checkpoint (updated with current raw values)
+2. All-time totals (accumulated via upsert)
+3. Current UTC daily bucket (accumulated via upsert)
+
+All three are written in a single SQLite transaction via persistAll().
+
+Idempotency:
+------------
+- Flush is idempotent: calling multiple times with no new traffic does NOT double-count
+- Checkpoints are advanced only on successful persist
+- On flush failure, previous checkpoint state is preserved and retry happens next interval
+
+Verified via Tests:
+------------------
+- go build ./... : PASS
+- go test ./... : PASS

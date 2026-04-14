@@ -1,0 +1,68 @@
+Task 7: REST API Contract - Today Window Query Evidence
+=====================================================
+
+Evidence for: Query today window for one mac/interface
+
+Test Environment: Linux container (mock mode)
+Build Status: PASS
+Test Status: PASS
+
+API Implementation:
+------------------
+GET /api/v1/traffic?window=today
+
+Supported windows: all, 30days, 7days, today, month
+
+Query Parameters:
+- window: Required. Valid values: all, 30days, 7days, today, month
+- interface: Optional. Filter by interface name
+- mac: Optional. Filter by MAC address (XX:XX:XX:XX:XX:XX format)
+- limit: Optional. Max records to return (default 100, max 1000)
+- offset: Optional. Records to skip for pagination (default 0)
+
+Response Format:
+---------------
+{
+  "window": "today",
+  "limit": 100,
+  "offset": 0,
+  "records": [
+    {
+      "interface": "eth0",
+      "ifindex": 2,
+      "mac": "aa:bb:cc:dd:ee:ff",
+      "ingress_bytes": 12345,
+      "egress_bytes": 6789,
+      "total_bytes": 19134,
+      "ingress_packets": 100,
+      "egress_packets": 50,
+      "total_packets": 150,
+      "window": "today"
+    }
+  ]
+}
+
+Error Responses:
+---------------
+HTTP 400 - Invalid window or malformed MAC:
+{
+  "error": "invalid window, must be one of: all, 30days, 7days, today, month"
+}
+or
+{
+  "error": "invalid mac format, must be XX:XX:XX:XX:XX:XX"
+}
+
+HTTP 500 - Server error:
+{
+  "error": "error message"
+}
+
+MAC Validation:
+--------------
+MAC must match regex: ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$
+
+Verified via Tests:
+------------------
+- go build ./... : PASS
+- go test ./... : PASS

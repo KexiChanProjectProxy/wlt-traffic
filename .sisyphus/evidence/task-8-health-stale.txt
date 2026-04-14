@@ -1,0 +1,51 @@
+Task 8: Health and Status - Stale Flush Triggering Unhealthy Evidence
+===================================================================
+
+Evidence for: Stale flush triggers unhealthy state
+
+Test Environment: Linux container (mock mode)
+Build Status: PASS
+Test Status: PASS
+
+Stale Flush Detection:
+--------------------
+The IsStale() method in FlushLoop returns true when:
+- lastFlush is zero (never flushed)
+- OR time since lastFlush exceeds 2x the flush interval
+
+Staleness impacts healthz in two ways:
+1. If service is healthy but flush is stale -> mode becomes "degraded"
+2. If mode is healthy and NOT stale -> healthz returns 200
+3. If mode is degraded OR stale -> healthz returns 503
+
+Partial Attach with allow_partial_attach=true:
+--------------------------------------------
+When service starts with some interfaces failing but allow_partial_attach=true:
+- Service enters degraded mode (not failed)
+- status endpoint shows:
+  - "mode": "degraded"
+  - "attached_ifaces": ["eth0"]
+  - "failed_ifaces": ["eth1"]
+  - "flush_error": "" (if flush is working)
+  - "last_flush_timestamp": <timestamp>
+
+Persistence Failure Visibility:
+-----------------------------
+When flush fails:
+- flushErr is captured and stored
+- status endpoint shows the error in "flush_error" field
+- Service continues running
+- healthz returns 503 if flush is stale OR mode is degraded
+
+Recovery:
+--------
+When flush succeeds after a failure:
+- flushErr is cleared
+- lastFlush is updated
+- If all interfaces are attached, mode becomes "healthy"
+- healthz returns 200
+
+Verified via Tests:
+------------------
+- go build ./... : PASS
+- go test ./... : PASS

@@ -1,0 +1,40 @@
+Task 7: REST API Contract - Invalid MAC Rejection Evidence
+===========================================================
+
+Evidence for: Invalid mac is rejected
+
+Test Environment: Linux container (mock mode)
+Build Status: PASS
+Test Status: PASS
+
+Invalid MAC Handling:
+--------------------
+The API validates MAC address format before processing queries.
+
+MAC must match: ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$
+
+Invalid examples that return HTTP 400:
+- "not-a-mac" - plain string
+- "aa:bb:cc:dd" - incomplete
+- "aa:bb:cc:dd:ee" - only 5 bytes
+- "gg:hh:ii:jj:kk:ll" - invalid hex letters (g-h)
+- "aa-bb-cc-dd-ee-ff" - wrong separator
+- "aa:bb:cc:dd:ee:ff:00" - too many bytes
+
+Response for invalid MAC:
+HTTP 400 Bad Request
+{
+  "error": "invalid mac format, must be XX:XX:XX:XX:XX:XX"
+}
+
+Invalid Window Handling:
+----------------------
+Invalid window values also return HTTP 400:
+{
+  "error": "invalid window, must be one of: all, 30days, 7days, today, month"
+}
+
+Verified via Tests:
+------------------
+- go build ./... : PASS
+- go test ./... : PASS

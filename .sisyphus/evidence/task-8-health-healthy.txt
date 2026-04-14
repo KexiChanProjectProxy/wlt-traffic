@@ -1,0 +1,51 @@
+Task 8: Health and Status - Healthy Service Reporting Evidence
+==========================================================
+
+Evidence for: Healthy service reports 200
+
+Test Environment: Linux container (mock mode)
+Build Status: PASS
+Test Status: PASS
+
+Health Endpoint Implementation:
+-----------------------------
+GET /healthz
+
+Returns HTTP 200 when:
+- Service mode is healthy (not degraded, not failed)
+- Last flush is NOT stale (< 2x flush interval since last successful flush)
+
+Returns HTTP 503 when:
+- Service mode is degraded or failed
+- OR last flush is stale (> 2x flush interval since last successful flush)
+
+Staleness Check:
+--------------
+A flush is considered stale if time since last successful flush exceeds 2x the flush interval.
+Default flush interval is 10 seconds, so staleness threshold is 20 seconds.
+
+Status Endpoint Implementation:
+-----------------------------
+GET /api/v1/status
+
+Returns JSON with:
+{
+  "mode": "healthy|degraded|failed",
+  "configured_ifaces": ["eth0", "eth1"],
+  "attached_ifaces": ["eth0"],
+  "failed_ifaces": [],
+  "last_flush_timestamp": 1713001234,
+  "flush_error": "",
+  "database_path": "./traffic-count.db"
+}
+
+Mode Values:
+-----------
+- "healthy": All interfaces attached, flush is current
+- "degraded": Some interfaces failed OR flush is stale but service is running
+- "failed": All interfaces failed OR service encountered fatal error
+
+Verified via Tests:
+------------------
+- go build ./... : PASS
+- go test ./... : PASS

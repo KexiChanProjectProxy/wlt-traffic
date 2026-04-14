@@ -1,0 +1,47 @@
+# Task 11: Retention Pruning Evidence
+
+## Test Execution Summary
+
+All pruning tests pass:
+- TestHousekeepingLoop_PruneDailyOldRows: PASS
+- TestHousekeepingLoop_TotalsNotPruned: PASS
+- TestHousekeepingLoop_ManyOldRowsPruned: PASS
+
+## Pruning Behavior Verification
+
+### Implementation
+- HousekeepingLoop.runOnce() calls storage.PruneDaily(ctx, cutoffDateUTC)
+- cutoffDateUTC computed by storage.PruneCutoffDate() = time.Now().UTC().AddDate(0, 0, -400).Format("2006-01-02")
+- PruneDaily executes: DELETE FROM mac_traffic_daily WHERE date_utc < cutoff
+- All-time totals table (mac_traffic_totals) is NEVER touched by pruning
+
+### Test Results
+
+TestHousekeepingLoop_PruneDailyOldRows:
+- Inserted old date 2024-01-01, recent date 2026-04-01, today date
+- After pruning with cutoff 2025-03-09: old 2024-01-01 pruned, 2026-04-01 and today remain
+- PruneDaily returns count of deleted rows (1)
+
+TestHousekeepingLoop_TotalsNotPruned:
+- Inserted total record with 5000 bytes
+- Inserted old daily date 2020-01-01
+- After pruning: totals record still has 5000 bytes (unchanged)
+- Daily record at 2020-01-01 was pruned
+
+TestHousekeepingLoop_ManyOldRowsPruned:
+- Inserted 50 daily records from 2020-01-01 through 2020-01-50
+- Inserted recent date 2026-04-01
+- After pruning: 50 old rows removed, 2026-04-01 remains
+- cutoff = 2025-03-09, cutoff+1 = 2025-03-10 verified to remain
+
+## UTC Determinism
+
+- PruneCutoffDate() uses time.Now().UTC().AddDate(0, 0, -400)
+- All date comparisons use UTC strings (YYYY-MM-DD format)
+- No local timezone influence on cutoff calculation
+
+## Files Involved
+
+- internal/runtime/housekeeping.go: HousekeepingLoop with runOnce pruning
+- internal/storage/storage.go: PruneDaily (cutoff=<date) and PruneCutoffDate()
+- internal/runtime/housekeeping_test.go: 5 test functions for pruning and totals preservation

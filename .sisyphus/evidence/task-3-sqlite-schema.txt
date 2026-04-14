@@ -1,0 +1,57 @@
+=== Task 3 Evidence: SQLite Schema Initialization ===
+
+Test Command: go test -v ./internal/storage/... -run "TestRepository_New|TestRepository_SchemaInit"
+
+Results:
+--- PASS: TestRepository_New (0.00s)
+--- PASS: TestRepository_SchemaInit (0.00s)
+
+Full Test Suite Output (go test ./internal/storage/...):
+=== RUN   TestRepository_New
+--- PASS: TestRepository_New (0.00s)
+=== RUN   TestRepository_SchemaInit
+--- PASS: TestRepository_SchemaInit (0.00s)
+=== RUN   TestRepository_UpsertDaily_Accumulation
+--- PASS: TestRepository_UpsertDaily_Accumulation (0.00s)
+=== RUN   TestRepository_UpsertTotal_Accumulation
+--- PASS: TestRepository_UpsertTotal_Accumulation (0.00s)
+=== RUN   TestRepository_PruneDaily
+--- PASS: TestRepository_PruneDaily (0.00s)
+=== RUN   TestRepository_ListDaily_DateRange
+--- PASS: TestRepository_ListDaily_DateRange (0.00s)
+=== RUN   TestRepository_Checkpoint_UpsertAndGet
+--- PASS: TestRepository_Checkpoint_UpsertAndGet (0.00s)
+=== RUN   TestRepository_ListCheckpoints
+--- PASS: TestRepository_ListCheckpoints (0.00s)
+=== RUN   TestRepository_ListTotals
+--- PASS: TestRepository_ListTotals (0.00s)
+=== RUN   TestCurrentDateUTC
+--- PASS: TestCurrentDateUTC (0.00s)
+=== RUN   TestFormatDateUTC
+--- PASS: TestFormatDateUTC (0.00s)
+=== RUN   TestPruneCutoffDate
+--- PASS: TestPruneCutoffDate (0.00s)
+=== RUN   TestRepository_TotalsNotAffectedByPrune
+--- PASS: TestRepository_TotalsNotAffectedByPrune (0.00s)
+PASS
+ok  	github.com/kexi/traffic-count/internal/storage	0.022s
+
+Schema Tables Created:
+- mac_traffic_totals (WITHOUT ROWID, PRIMARY KEY on interface_name, ifindex, mac)
+- mac_traffic_daily (WITHOUT ROWID, PRIMARY KEY on interface_name, ifindex, mac, date_utc)
+- collector_checkpoints (WITHOUT ROWID, PRIMARY KEY on interface_name, ifindex, mac)
+
+Indexes Created:
+- idx_daily_date_utc ON mac_traffic_daily(date_utc)
+- idx_totals_interface ON mac_traffic_totals(interface_name)
+- idx_daily_interface ON mac_traffic_daily(interface_name)
+- idx_checkpoints_interface ON collector_checkpoints(interface_name)
+
+Journal Mode: WAL (verified via PRAGMA journal_mode = wal)
+
+Uniqueness Constraints:
+- mac_traffic_totals: UNIQUE(interface_name, ifindex, mac)
+- mac_traffic_daily: UNIQUE(interface_name, ifindex, mac, date_utc)
+- collector_checkpoints: UNIQUE(interface_name, ifindex, mac)
+
+All-time totals query does not require scanning all daily rows - uses dedicated mac_traffic_totals table with index.

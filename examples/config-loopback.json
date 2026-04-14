@@ -1,0 +1,9 @@
+{
+  "interfaces": ["lo"],
+  "bind_address": "127.0.0.1:8080",
+  "database_path": "/tmp/traffic-count-test.db",
+  "flush_interval": 10,
+  "housekeeping_interval": 3600,
+  "log_level": "info",
+  "allow_partial": false
+}

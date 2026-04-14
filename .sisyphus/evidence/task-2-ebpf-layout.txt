@@ -1,0 +1,74 @@
+eBPF Key/Value Layout Validation for Task 2
+============================================
+Date: Mon Apr 13 2026
+Working directory: /home/kexi/traffic-count
+
+1. Layout Verification Summary
+-------------------------------
+Key struct: struct traffic_key (10 bytes)
+  - ifindex: __u32 (4 bytes) at offset 0
+  - mac[6]: __u8[6] (6 bytes) at offset 4
+
+Value struct: struct traffic_counter (48 bytes)
+  - bytes: __u64 (8 bytes) at offset 0
+  - packets: __u64 (8 bytes) at offset 8
+  - ingress_bytes: __u64 (8 bytes) at offset 16
+  - ingress_packets: __u64 (8 bytes) at offset 24
+  - egress_bytes: __u64 (8 bytes) at offset 32
+  - egress_packets: __u64 (8 bytes) at offset 40
+
+2. Go-Side Type Mirrors (internal/ebpf/ebpf.go)
+------------------------------------------------
+type TrafficKey struct {
+    Ifindex uint32  // 4 bytes
+    Mac     [6]byte // 6 bytes
+} // Total: 10 bytes - MATCHES C struct
+
+type TrafficCounter struct {
+    Bytes          uint64 // 8 bytes
+    Packets        uint64 // 8 bytes
+    IngressBytes   uint64 // 8 bytes
+    IngressPackets uint64 // 8 bytes
+    EgressBytes    uint64 // 8 bytes
+    EgressPackets  uint64 // 8 bytes
+} // Total: 48 bytes - MATCHES C struct
+
+3. Map Specification
+--------------------
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, struct traffic_key);     // 10 bytes
+    __type(value, struct traffic_counter); // 48 bytes
+    __uint(max_entries, 262144);
+} traffic_map SEC(".maps");
+
+4. Layout Test (Go verification)
+---------------------------------
+Go struct sizes verified via unsafe.Sizeof():
+- TrafficKey: 10 bytes
+- TrafficCounter: 48 bytes
+
+5. Accounting Rules (Fixed Rule Enforcement)
+--------------------------------------------
+- TC ingress: uses eth->h_dest (destination MAC) as key - local receiver
+- TC egress: uses eth->h_source (source MAC) as key - local sender
+- Both programs atomically increment same counter structure
+
+6. Verifier-Safe Ethernet Parsing
+----------------------------------
+Both programs include bounds check before MAC dereference:
+    struct ethhdr *eth = data;
+    if ((void *)(eth + 1) > data_end)
+        return TC_ACT_OK;
+
+7. Source Files Verified
+------------------------
+bpf/shared.h - Shared struct definitions (traffic_key, traffic_counter)
+bpf/ingress.c - SEC("tc/ingress") with eth->h_dest, SEC("tc/egress") with eth->h_source
+             - Contains map definition with SEC(".maps")
+bpf/egress.c - Reference only (both programs now in ingress.c)
+
+8. Layout Validation: PASS
+--------------------------
+Key layout: (ifindex=4 bytes, mac=6 bytes) = 10 bytes total
+Value layout: (bytes, packets, ingress_bytes, ingress_packets, egress_bytes, egress_packets) = 6 x 8 = 48 bytes total

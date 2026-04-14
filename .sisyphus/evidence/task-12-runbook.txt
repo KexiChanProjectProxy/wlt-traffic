@@ -1,0 +1,106 @@
+Task 12: Executor Runbook and Operational Packaging
+==================================================
+
+DATE: 2026-04-13
+
+EVIDENCE: Operational packaging, configuration examples, and executor runbook
+
+CONFIGURATION FILES
+===================
+
+examples/config.json
+- Production config with eth0, wg0 interfaces
+- Persistent database path
+- Loopback bind address (127.0.0.1:8080)
+
+examples/config-loopback.json (NEW)
+- Loopback-only config for testing
+- Uses "lo" interface with temporary SQLite path (/tmp/traffic-count-test.db)
+- Suitable for local development and CI environments
+
+examples/traffic-count.service
+- systemd unit file for production deployment
+- Runs as non-root traffic-count user/group
+- Read-only config at /etc/traffic-count
+- Read-write data at /var/lib/traffic-count
+
+BUILD AND RUN COMMANDS
+======================
+
+Build:
+  make build              # Full build: eBPF + Go binary
+  make build-ebpf        # eBPF binding generation only
+  make build-binary      # Go binary only (depends on build-ebpf)
+
+Test:
+  make test              # go test ./...
+
+Clean:
+  make clean             # Remove bin/ and generated eBPF artifacts
+
+Run:
+  make run              # make build && ./bin/traffic-count
+  ./bin/traffic-count --config examples/config.json
+
+VERIFICATION
+============
+
+Build passes:
+  go build -o bin/traffic-count ./cmd/traffic-count  ✓
+
+Tests pass:
+  go test ./...  ✓
+
+All Makefile targets verified against actual commands:
+  build, build-ebpf, build-binary, test, clean, run,
+  verify-build-order, verify-layout
+
+SERVICE MODES
+=============
+
+| Mode     | Condition |
+|----------|-----------|
+| healthy  | All configured interfaces attached |
+| degraded | Some attached, some failed, allow_partial=true |
+| failed   | Zero attached, OR partial with allow_partial=false |
+
+HEALTHY/DEGRADED/FAILED SEMANTICS
+=================================
+
+/healthz endpoint:
+  - Returns 200 if IsHealthy() AND !flush.IsStale()
+  - Returns 503 otherwise
+
+Degraded conditions:
+  1. Partial interface attachment with allow_partial=true
+  2. Flush loop stale (>2x flush interval since last success)
+
+Failed conditions:
+  1. Zero interfaces attached at startup
+  2. Partial attachment with allow_partial=false
+  3. Service exits immediately on failed state
+
+RESTART/RECOVERY BEHAVIOR
+=========================
+
+- On startup, flush loop restores checkpoints from SQLite
+- Deltas computed as: current_raw - checkpoint_last_raw
+- If day changed since checkpoint, uses raw values directly (handles rollover)
+- No double-counting after restart (verified in Task 10)
+- Graceful shutdown: final flush before exit
+
+HOUSEKEEPING BEHAVIOR
+=====================
+
+- HousekeepingLoop runs at configurable interval (default 3600s)
+- Prunes mac_traffic_daily rows where date_utc < (today - 400 days)
+- mac_traffic_totals is NEVER pruned (independent table)
+- Runs once at startup to catch any missed pruning
+
+FILES CREATED/UPDATED
+=====================
+
+- README.md (updated) - Complete operator documentation
+- examples/config-loopback.json (new) - Loopback test config
+- examples/config.json (existing, verified correct)
+- examples/traffic-count.service (existing, verified correct)

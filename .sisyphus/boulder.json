@@ -1,0 +1,121 @@
+{
+  "active_plan": "/home/kexi/traffic-count/.sisyphus/plans/mac-traffic-ebpf-service.md",
+  "started_at": "2026-04-13T15:02:24.584Z",
+  "session_ids": [
+    "ses_278b55224ffeoBr9JsOiJV6FsX",
+    "ses_27891e572ffexeeX26BCAJ3zmb",
+    "ses_27891e0b8ffezunIlS3wxoGLVa",
+    "ses_27891e0b2ffeZH7Y41WZcxawRk",
+    "ses_27891e0aeffezYrEKkPivAjd2y",
+    "ses_2784ac7efffeKoJwQycyvq5gGr",
+    "ses_27849de7fffemtNbPK1q9VCpWD",
+    "ses_27849de1effeJY6jkpPyIbawE1",
+    "ses_27849de16ffeJsWLByTSFTRQGr",
+    "ses_278419cc9ffeC5TXb0Oa9AraIl",
+    "ses_27840a4ccffeKmrWn4sNgOyCUA",
+    "ses_27840a48effeIDHvG9VsXW5Hva",
+    "ses_27840a45bffeYz9RafQTCh63Yj",
+    "ses_27840a424ffelkgpUs7YR7HgP0"
+  ],
+  "session_origins": {
+    "ses_278b55224ffeoBr9JsOiJV6FsX": "direct",
+    "ses_27891e572ffexeeX26BCAJ3zmb": "appended",
+    "ses_27891e0b8ffezunIlS3wxoGLVa": "appended",
+    "ses_27891e0b2ffeZH7Y41WZcxawRk": "appended",
+    "ses_27891e0aeffezYrEKkPivAjd2y": "appended",
+    "ses_2784ac7efffeKoJwQycyvq5gGr": "direct",
+    "ses_27849de7fffemtNbPK1q9VCpWD": "appended",
+    "ses_27849de1effeJY6jkpPyIbawE1": "appended",
+    "ses_27849de16ffeJsWLByTSFTRQGr": "appended",
+    "ses_278419cc9ffeC5TXb0Oa9AraIl": "direct",
+    "ses_27840a4ccffeKmrWn4sNgOyCUA": "appended",
+    "ses_27840a48effeIDHvG9VsXW5Hva": "appended",
+    "ses_27840a45bffeYz9RafQTCh63Yj": "appended",
+    "ses_27840a424ffelkgpUs7YR7HgP0": "appended"
+  },
+  "plan_name": "mac-traffic-ebpf-service",
+  "agent": "atlas",
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "Initialize the Go service skeleton and deterministic build pipeline",
+      "session_id": "ses_2783ee49dffeBUK5fgiykPR9A6",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-13T16:53:44.685Z"
+    },
+    "todo:2": {
+      "task_key": "todo:2",
+      "task_label": "2",
+      "task_title": "Implement TC ingress and egress eBPF programs for `(interface, MAC)` byte accounting",
+      "session_id": "ses_2783a85b1ffectOkSdynV818bj",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-04-13T17:01:10.821Z"
+    },
+    "todo:3": {
+      "task_key": "todo:3",
+      "task_label": "3",
+      "task_title": "Design the SQLite schema and repository layer for all-time totals and UTC daily buckets",
+      "session_id": "ses_27829b6aeffeybzcbgmJYQ5AGm",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-13T17:20:39.611Z"
+    },
+    "todo:4": {
+      "task_key": "todo:4",
+      "task_label": "4",
+      "task_title": "Define configuration, startup validation, and runtime contract",
+      "session_id": "ses_278226849ffegFaIvK8ThSyLtW",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-13T17:28:31.969Z"
+    },
+    "todo:5": {
+      "task_key": "todo:5",
+      "task_label": "5",
+      "task_title": "Implement the eBPF loader and TC attachment manager",
+      "session_id": "ses_278178f23ffeygx5H6x3DS1qUW",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-04-13T17:56:24.633Z"
+    },
+    "todo:10": {
+      "task_key": "todo:10",
+      "task_label": "10",
+      "task_title": "Verify end-to-end counting, persistence recovery, and window correctness",
+      "session_id": "ses_278024979ffeT8W9MefKMfPwR0",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-04-13T18:03:59.623Z"
+    },
+    "todo:11": {
+      "task_key": "todo:11",
+      "task_label": "11",
+      "task_title": "Implement UTC rollover and retention pruning behavior",
+      "session_id": "ses_277f984beffeBDuZL9kQz4nSKz",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-13T18:13:16.512Z"
+    },
+    "todo:12": {
+      "task_key": "todo:12",
+      "task_label": "12",
+      "task_title": "Finalize operational packaging, configuration examples, and executor runbook",
+      "session_id": "ses_277f26937ffeZb7FGLrDjJ905v",
+      "agent": "Sisyphus-Junior",
+      "category": "writing",
+      "updated_at": "2026-04-13T18:18:17.093Z"
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "Plan Compliance Audit — oracle",
+      "session_id": "ses_277ed3026ffeLUJhMofSihI8Ys",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-04-13T18:23:21.123Z"
+    }
+  }
+}

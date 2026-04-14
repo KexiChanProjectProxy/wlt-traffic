@@ -1,0 +1,107 @@
+Task 12: API Documentation
+===========================
+
+DATE: 2026-04-13
+
+ENDPOINT VERIFICATION VS IMPLEMENTATION
+=======================================
+
+All endpoints verified against internal/http/http.go:
+
+GET /healthz
+------------
+Path: mux.HandleFunc("GET /healthz", s.handleHealthz)
+Handler: s.handleHealthz
+Logic:
+  - Returns 200 if s.svc.IsHealthy() AND !s.flush.IsStale()
+  - Returns 503 otherwise
+
+Response:
+  - 200 OK: no body
+  - 503 Service Unavailable: no body
+
+GET /api/v1/status
+------------------
+Path: mux.HandleFunc("GET /api/v1/status", s.handleStatus)
+Handler: s.handleStatus
+Response (application/json):
+  {
+    "mode": "healthy|degraded|failed",
+    "configured_ifaces": ["eth0", "wg0"],
+    "attached_ifaces": ["eth0"],
+    "failed_ifaces": ["wg0"],
+    "last_flush_timestamp": 1744567800,
+    "flush_error": "",
+    "database_path": "/var/lib/traffic-count/traffic-count.db"
+  }
+
+Mode determination:
+  - Starts as "healthy"
+  - If s.svc.IsDegraded() → "degraded"
+  - Else if s.svc.IsFailed() → "failed"
+  - Else if s.flush.IsStale() AND mode=="healthy" → "degraded"
+
+GET /api/v1/traffic
+-------------------
+Path: mux.HandleFunc("GET /api/v1/traffic", s.handleTraffic)
+Handler: s.handleTraffic
+
+Query parameters:
+  window   - string, one of: all, 30days, 7days, today, month (default: today)
+  interface - string, optional, filter by interface name
+  mac      - string, optional, filter by MAC XX:XX:XX:XX:XX:XX
+  limit    - int, 1-1000, default 100
+  offset   - int, >=0, default 0
+
+Error responses:
+  - 400 Bad Request: invalid window value
+  - 400 Bad Request: invalid mac format
+  - 500 Internal Server Error: database error
+
+Success response (application/json):
+  {
+    "window": "today",
+    "limit": 100,
+    "offset": 0,
+    "records": [
+      {
+        "interface": "eth0",
+        "ifindex": 2,
+        "mac": "aa:bb:cc:dd:ee:ff",
+        "ingress_bytes": 1234,
+        "egress_bytes": 5678,
+        "total_bytes": 6912,
+        "ingress_packets": 10,
+        "egress_packets": 20,
+        "total_packets": 30,
+        "window": "today"
+      }
+    ]
+  }
+
+Window semantics (verified in Task 10):
+  - all: returns all-time totals (mac_traffic_totals table)
+  - today: current UTC date only
+  - 7days: start = today - 6 days, end = today (inclusive)
+  - 30days: start = today - 29 days, end = today (inclusive)
+  - month: start = first day of current calendar month, end = today
+
+CONFIG FIELDS
+=============
+
+From internal/config/config.go Config struct:
+
+  Interfaces           []string  // Required: interface allowlist
+  BindAddress         string    // Required: loopback-only (127.0.0.1/localhost/::1)
+  DatabasePath        string    // Required: SQLite file path
+  FlushInterval       int       // Required: seconds, must be > 0
+  HousekeepingInterval int      // Optional: seconds (default 3600)
+  LogLevel            string    // Optional: debug/info/warn/error (default info)
+  AllowPartial        bool      // Optional: allow degraded on partial failure (default false)
+
+Validation constraints:
+  - interfaces must be non-empty, no blank names
+  - bind_address must be loopback (127.0.0.1, localhost, or ::1)
+  - database_path must be specified
+  - flush_interval must be positive
+  - log_level must be one of: debug, info, warn, error

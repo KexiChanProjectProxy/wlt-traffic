@@ -1,0 +1,67 @@
+# Task 10: Restart Persistence and Recovery Evidence
+
+## Test Execution Summary
+
+All restart and checkpoint tests pass:
+- TestRestartPersistence: PASS
+- TestRestartCheckpointRecovery: PASS
+- TestFlushLoopDeltaComputation: PASS
+
+## Checkpoint Mechanism Verification
+
+### Checkpoint Structure
+Collector checkpoints store last-seen raw counter values per (interface, ifindex, mac):
+- last_raw_bytes, last_raw_packets
+- last_ingress_bytes, last_ingress_packets
+- last_egress_bytes, last_egress_packets
+- date_utc (for day rollover detection)
+
+### Delta Computation Flow
+1. Flush loop reads current raw counters from eBPF map
+2. Gets checkpoint from SQLite for same key
+3. If same day: delta = current_raw - checkpoint_raw
+4. If new day or no checkpoint: delta = current_raw (full value)
+5. Applies delta to totals and daily buckets
+6. Updates checkpoint with current raw values
+
+### Anti-Double-Counting Verification
+
+TestRestartCheckpointRecovery verified:
+1. First session: upsert total (1000 bytes), upsert daily (1000 bytes), save checkpoint (1000 raw)
+2. Second session: checkpoint restored, total remains 1000 (NOT 2000)
+3. New delta (500) applied correctly, total becomes 1500 (NOT 2500)
+
+TestFlushLoopDeltaComputation verified:
+1. Initial raw counters: 1000 bytes
+2. After checkpoint saved, new raw counters: 1500 bytes
+3. Delta computed: 500 (1500 - 1000)
+4. Total after delta: 1500 (correct, no double-count)
+
+## Restart Recovery Flow
+
+1. Service starts, FlushLoop.Start() called
+2. restoreCheckpoints() verifies database connectivity
+3. Checkpoints are read on-demand during Flush (lazy restore)
+4. Delta computation uses checkpoints to prevent recount
+
+## Persistence Guarantees
+
+1. All-time totals survive process restart (SQLite durability)
+2. Daily buckets survive process restart
+3. Checkpoints survive process restart
+4. No double-counting after restart due to delta-based flush
+
+## Multi-Interface Same-MAC Verification
+
+TestMultiInterfaceSameMacAPILevel verified:
+- Same MAC (aa:bb:cc:dd:ee:ff) on eth0 (ifindex 2) and eth1 (ifindex 3)
+- eth0 total: 1000 bytes
+- eth1 total: 2000 bytes
+- Distinct records returned by ListTotals()
+- GetTotal() returns correct per-interface data
+
+## Files Verified
+
+- internal/runtime/flush.go: Flush loop delta computation and checkpoint usage
+- internal/storage/storage.go: Checkpoint upsert/get and recovery
+- integration/e2e_windows_test.go: Restart and checkpoint tests

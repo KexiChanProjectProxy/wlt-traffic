@@ -1,0 +1,58 @@
+# Task 10: End-to-End Window Verification Evidence
+
+## Test Execution Summary
+
+All window verification tests pass:
+- TestAllWindowVerification: PASS
+- TestTodayWindowVerification: PASS
+- Test7DaysWindowVerification: PASS
+- Test30DaysWindowVerification: PASS
+- TestMonthWindowVerification: PASS
+- TestDeterministicWindowBoundaries: PASS
+
+## Window Semantics Verification
+
+### 7days Window
+- Implementation: start = today - 6, end = today (inclusive)
+- Test verified: 6days ago (600 bytes) and 3days ago (300 bytes) included = 900 total
+- Test verified: 8days ago (800 bytes) correctly excluded
+
+### 30days Window
+- Implementation: start = today - 29, end = today (inclusive)
+- Test verified: 10days ago (1000 bytes) and 29days ago (1000 bytes) included = 2000 total
+- Test verified: 31days ago (2000 bytes) correctly excluded
+
+### month Window
+- Implementation: start = first day of current calendar month, end = today
+- Test verified: only current month records included
+- Test verified: previous month's records correctly excluded
+
+### today Window
+- Implementation: start = today, end = today
+- Test verified: only today's records returned
+
+### all Window
+- Implementation: returns all-time totals from mac_traffic_totals table
+- Test verified: aggregated totals across all historical data
+
+## UTC Semantics Verification
+
+All date calculations use UTC:
+- CurrentDateUTC() returns time.Now().UTC().Format("2006-01-02")
+- FormatDateUTC() formats time.Time in UTC as YYYY-MM-DD
+- Date range queries use UTC date strings
+
+## Test Coverage
+
+Window tests cover:
+1. All 5 window types (all, 30days, 7days, today, month)
+2. Boundary conditions (edge dates at window limits)
+3. Exclusion of out-of-window data
+4. UTC deterministic behavior
+5. Aggregation from daily buckets to window totals
+
+## Files Tested
+
+- integration/e2e_windows_test.go: 14 new test functions
+- internal/storage/storage.go: Repository window query methods
+- internal/http/http.go: API window handler logic

@@ -1,0 +1,34 @@
+QA Evidence for Task 4: Degraded Mode Configuration Test
+==============================================
+
+Scenario: Partial attach degraded mode is explicit
+============================================
+Test: TestValidatorValidate_PartialAttach_Degraded
+Command: go test -v -run "TestValidatorValidate_PartialAttach_Degraded" ./internal/bootstrap/...
+Expected: service starts in degraded mode with failed interface listed explicitly
+
+Test Setup:
+  Config.Interfaces: ["lo", "nonexistent0"]
+  Config.AllowPartial: true
+  checkInterface("lo") -> nil (valid)
+  checkInterface("nonexistent0") -> error (invalid)
+  checkQdisc -> nil (bypassed for testing)
+
+Actual Result:
+  Mode: degraded
+  TotalInterfaces: 2
+  AttachedInterfaces: ["lo"]
+  FailedInterfaces: ["nonexistent0"]
+  AttachErrors: ["interface \"nonexistent0\" does not exist"]
+  Error: nil (degraded mode returns no error)
+
+Status: PASS - Degraded mode correctly detected and failed interface reported
+
+Runtime contract verification:
+  - allow_partial=true with 1 valid + 1 invalid interface: PASS (degraded mode, no error)
+  - Mode field correctly set to "degraded": PASS
+  - FailedInterfaces tracks "nonexistent0": PASS
+  - AttachedInterfaces tracks "lo": PASS
+  - Service can continue operating in degraded state
+
+Timestamp: 2026-04-13T12:00:00Z

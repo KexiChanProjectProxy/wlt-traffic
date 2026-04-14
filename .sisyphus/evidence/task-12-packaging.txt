@@ -1,0 +1,39 @@
+Task 12: Operational packaging and configuration examples
+======================================================
+
+DATE: 2026-04-13
+
+FILES CREATED:
+- examples/config.json    - Example service configuration
+- examples/traffic-count.service - systemd unit file
+
+CONFIG.JSON:
+{
+  "interfaces": ["eth0", "wg0"],
+  "bind_address": "127.0.0.1:8080",
+  "database_path": "/var/lib/traffic-count/traffic-count.db",
+  "flush_interval": 10,
+  "log_level": "info",
+  "allow_partial": false
+}
+
+SYSTEMD SERVICE NOTES:
+- Runs as non-root traffic-count user/group
+- Config at /etc/traffic-count/config.json (read-only)
+- Data at /var/lib/traffic-count (read-write)
+- Hardened: NoNewPrivileges, ProtectSystem=strict, ProtectHome=true
+- Auto-restart on failure with 5s delay
+
+INSTALL STEPS:
+1. Copy binary: cp traffic-count /usr/local/bin/
+2. Create user: useradd -r traffic-count
+3. Setup dirs: mkdir -p /etc/traffic-count /var/lib/traffic-count
+4. Copy config: cp examples/config.json /etc/traffic-count/config.json
+5. Set perms: chown -R traffic-count:traffic-count /var/lib/traffic-count
+6. Install unit: cp examples/traffic-count.service /etc/systemd/system/
+7. Reload & start: systemctl daemon-reload && systemctl enable --now traffic-count
+
+VERIFICATION:
+- Build passes: go build ./... ✓
+- Tests pass: go test ./... ✓
+- All tasks 5-11 completed and verified

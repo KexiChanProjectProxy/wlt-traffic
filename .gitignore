@@ -1,0 +1,5 @@
+bin/
+traffic-count
+*.o
+*.so
+.DS_Store

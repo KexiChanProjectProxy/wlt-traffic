@@ -1,0 +1,8 @@
+{
+  "interfaces": ["eth0", "wg0"],
+  "bind_address": "127.0.0.1:8080",
+  "database_path": "/var/lib/traffic-count/traffic-count.db",
+  "flush_interval": 10,
+  "log_level": "info",
+  "allow_partial": false
+}
