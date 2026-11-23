@@ -30,12 +30,14 @@ type Server struct {
 	loc           *time.Location
 	flushInterval time.Duration
 	configured    []string
-	now           func() time.Time
-	mux           *http.ServeMux
+	// LiveInterval is the sampling period behind /api/v1/live.
+	LiveInterval time.Duration
+	now          func() time.Time
+	mux          *http.ServeMux
 }
 
 func NewServer(repo *storage.Repository, st Status, loc *time.Location, flushInterval time.Duration, configured []string) *Server {
-	s := &Server{repo: repo, st: st, loc: loc, flushInterval: flushInterval, configured: configured, now: time.Now, mux: http.NewServeMux()}
+	s := &Server{repo: repo, st: st, loc: loc, flushInterval: flushInterval, LiveInterval: flushInterval, configured: configured, now: time.Now, mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /healthz", s.handleHealthz)
 	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
 	s.mux.HandleFunc("GET /api/v1/traffic", s.handleTraffic)
@@ -376,13 +378,8 @@ func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 			devices = append(devices, l)
 		}
 	}
-	var sampled int64
-	if t := s.st.LastFlush(); !t.IsZero() {
-		sampled = t.Unix()
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"interval_seconds": int(s.flushInterval.Seconds()),
-		"sampled_at":       sampled,
+		"interval_seconds": s.LiveInterval.Seconds(),
 		"devices":          devices,
 	})
 }

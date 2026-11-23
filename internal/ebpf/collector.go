@@ -68,7 +68,7 @@ type Collector struct {
 	mu      sync.Mutex
 	ifaces  map[string]*attachment
 	names   map[uint32]string // ifindex -> interface name, kept after detach
-	forceTC bool // TRAFFIC_COUNT_FORCE_TC=1: skip TCX, use clsact/cls_bpf (testing)
+	forceTC bool              // TRAFFIC_COUNT_FORCE_TC=1: skip TCX, use clsact/cls_bpf (testing)
 }
 
 // Load loads the embedded BPF programs and creates the counter map.

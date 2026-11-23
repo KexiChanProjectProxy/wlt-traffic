@@ -3,6 +3,7 @@
   "bind_address": "127.0.0.1:8081",
   "database_path": "/var/lib/traffic-count/traffic-count.db",
   "flush_interval": 10,
+  "live_interval": 1,
   "housekeeping_interval": 3600,
   "retention_days": 400,
   "timezone": "Local",

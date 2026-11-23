@@ -22,6 +22,10 @@ type Config struct {
 	DatabasePath string `json:"database_path"`
 	// FlushInterval is how often counters are sampled and written (seconds).
 	FlushInterval int `json:"flush_interval"`
+	// LiveInterval is how often counters are sampled for the live rate
+	// (seconds). Samples are only kept in memory; the database is written
+	// every FlushInterval.
+	LiveInterval int `json:"live_interval"`
 	// HousekeepingInterval is how often old daily rows are pruned (seconds).
 	HousekeepingInterval int `json:"housekeeping_interval"`
 	// RetentionDays is how long daily rows are kept. Totals are kept forever.
@@ -43,6 +47,7 @@ func Default() *Config {
 		BindAddress:          "127.0.0.1:8081",
 		DatabasePath:         "/var/lib/traffic-count/traffic-count.db",
 		FlushInterval:        10,
+		LiveInterval:         1,
 		HousekeepingInterval: 3600,
 		RetentionDays:        400,
 		Timezone:             "Local",
@@ -105,6 +110,9 @@ func (c *Config) Validate() error {
 	}
 	if c.FlushInterval <= 0 {
 		return fmt.Errorf("config: flush_interval must be positive")
+	}
+	if c.LiveInterval <= 0 || c.LiveInterval > c.FlushInterval {
+		return fmt.Errorf("config: live_interval must be between 1 and flush_interval")
 	}
 	if c.HousekeepingInterval <= 0 {
 		return fmt.Errorf("config: housekeeping_interval must be positive")

@@ -62,6 +62,7 @@ type Accountant struct {
 	lastSample time.Time
 	lastFlush  time.Time
 	flushErr   error
+	sampleErr  error
 }
 
 func NewAccountant(src Source, store Store, loc *time.Location) *Accountant {
@@ -91,6 +92,14 @@ func sub(a, b uint64) uint64 {
 
 // Tick samples the counters once and persists the deltas.
 func (a *Accountant) Tick(ctx context.Context, now time.Time) error {
+	a.Sample(now)
+	return a.Persist(ctx, now)
+}
+
+// Sample reads the kernel counters, adds the increase since the previous
+// sample to the pending (not yet written) totals and updates the live rates.
+// It is cheap and runs every live interval (1s by default).
+func (a *Accountant) Sample(now time.Time) {
 	samples, snapErr := a.src.Snapshot()
 
 	a.mu.Lock()
@@ -163,11 +172,7 @@ func (a *Accountant) Tick(ctx context.Context, now time.Time) error {
 		}
 	}
 	a.lastSample = now
-
-	deltas := make([]storage.Delta, 0, len(a.pending))
-	for k, c := range a.pending {
-		deltas = append(deltas, storage.Delta{Day: k.day, Iface: k.iface, MAC: k.mac, Counters: c})
-	}
+	a.sampleErr = snapErr
 	a.mu.Unlock()
 
 	if len(evict) > 0 {
@@ -175,6 +180,17 @@ func (a *Accountant) Tick(ctx context.Context, now time.Time) error {
 			a.logf("evict idle counters: %v", err)
 		}
 	}
+}
+
+// Persist writes everything pending to the store; what fails stays pending.
+func (a *Accountant) Persist(ctx context.Context, now time.Time) error {
+	a.mu.Lock()
+	deltas := make([]storage.Delta, 0, len(a.pending))
+	for k, c := range a.pending {
+		deltas = append(deltas, storage.Delta{Day: k.day, Iface: k.iface, MAC: k.mac, Counters: c})
+	}
+	snapErr := a.sampleErr
+	a.mu.Unlock()
 
 	err := a.store.AddDeltas(ctx, deltas, now)
 
@@ -208,12 +224,17 @@ func (a *Accountant) Tick(ctx context.Context, now time.Time) error {
 	return a.flushErr
 }
 
-// Run ticks every interval until ctx is done, then ticks once more so nothing
-// counted is lost on shutdown.
-func (a *Accountant) Run(ctx context.Context, interval time.Duration) {
-	t := time.NewTicker(interval)
+// Run samples every liveInterval and persists every flushInterval until ctx
+// is done, then samples and persists once more so nothing is lost.
+func (a *Accountant) Run(ctx context.Context, liveInterval, flushInterval time.Duration) {
+	if liveInterval <= 0 || liveInterval > flushInterval {
+		liveInterval = flushInterval
+	}
+	t := time.NewTicker(liveInterval)
 	defer t.Stop()
-	a.Tick(ctx, time.Now()) // establish the baseline / first rates
+	start := time.Now()
+	a.Tick(ctx, start) // establish the baseline
+	lastPersist := start
 	for {
 		select {
 		case <-ctx.Done():
@@ -222,8 +243,13 @@ func (a *Accountant) Run(ctx context.Context, interval time.Duration) {
 			}
 			return
 		case now := <-t.C:
-			if err := a.Tick(ctx, now); err != nil {
-				a.logf("flush: %v", err)
+			a.Sample(now)
+			// Small slack so ticker jitter does not skip a whole flush period.
+			if now.Sub(lastPersist) >= flushInterval-liveInterval/2 {
+				lastPersist = now
+				if err := a.Persist(ctx, now); err != nil {
+					a.logf("flush: %v", err)
+				}
 			}
 		}
 	}
