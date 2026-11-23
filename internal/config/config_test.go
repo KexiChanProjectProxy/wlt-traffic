@@ -26,6 +26,7 @@ func TestParseRejects(t *testing.T) {
 		{`{"interfaces":["a","a"]}`, "twice"},
 		{`{"interfaces":["a"],"bind_address":"0.0.0.0:1"}`, "loopback"},
 		{`{"interfaces":["a"],"flush_interval":0}`, "flush_interval"},
+		{`{"interfaces":["a"],"live_interval":20}`, "live_interval"},
 		{`{"interfaces":["a"],"timezone":"Mars/Base"}`, "timezone"},
 		{`{"interfaces":["a"],"bind_adress":"127.0.0.1:1"}`, "unknown field"},
 	} {

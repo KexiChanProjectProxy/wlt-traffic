@@ -18,7 +18,7 @@
 - 内核 ≥ 6.6 使用 TCX，更老的内核自动回退到 clsact + cls_bpf。
 - 配置的接口被删除重建（网桥经常如此）后会自动重新挂载。
 
-服务每隔 `flush_interval` 秒读取一次计数，减去上一次读数（基线保存在内存中——内核 map 与进程同生命周期），把增量按**本地时区**的日期写入 SQLite。写入失败会保留增量并在下次重试；退出时会做最后一次落盘。
+服务每隔 `live_interval` 秒（默认 1 秒）读取一次计数，减去上一次读数（基线保存在内存中——内核 map 与进程同生命周期）并更新实时速率；每隔 `flush_interval` 秒把累计的增量按**本地时区**的日期写入 SQLite。写入失败会保留增量并在下次重试；退出时会做最后一次落盘。
 
 只配置网桥本身，不要同时配置它的成员口，否则桥接的帧会被计两次。WireGuard、tun 等三层接口没有 MAC，会被拒绝。
 
@@ -54,7 +54,8 @@ make deb        # 生成本机架构的 ../traffic-count_<版本>_<架构>.deb
 | `interfaces` | 必填 | 要统计的面向局域网的二层接口 |
 | `bind_address` | `127.0.0.1:8081` | API 监听地址，必须是回环地址 |
 | `database_path` | `/var/lib/traffic-count/traffic-count.db` | SQLite 文件 |
-| `flush_interval` | `10` | 采样/落盘间隔（秒） |
+| `flush_interval` | `10` | 写数据库间隔（秒） |
+| `live_interval` | `1` | 实时速率的采样间隔（秒），只在内存中，不写库 |
 | `housekeeping_interval` | `3600` | 清理过期日数据的间隔（秒） |
 | `retention_days` | `400` | 日数据保留天数；累计总量永久保留 |
 | `timezone` | `Local` | IANA 时区名（如 `Asia/Shanghai`），决定"今天"从几点开始 |
@@ -73,7 +74,7 @@ make deb        # 生成本机架构的 ../traffic-count_<版本>_<架构>.deb
 | `GET /api/v1/traffic?window=&mac=&interface=&group=mac&sort=total&limit=&offset=` | 排序后的流量记录 |
 | `GET /api/v1/summary?mac=` | 一次返回某设备（或全部设备）所有窗口的合计，附实时速率 |
 | `GET /api/v1/series?mac=&days=30` | 按天的序列，从旧到新，无流量的日期补零 |
-| `GET /api/v1/live?mac=` | 最近一个采样周期内每台设备的速率（字节/秒） |
+| `GET /api/v1/live?mac=` | 最近一个 `live_interval`（默认 1 秒）内每台设备的速率（字节/秒） |
 
 `ingress_*` / `egress_*` 是同一组数字的接口视角写法（ingress = 上传，egress = 下载），为兼容老客户端保留。`group=mac` 会把同一设备在多个接口上的记录合并，`interfaces` 列出这些接口。结果按 `sort`（`total`、`upload`、`download`、`mac`）排序，并返回 `total_count` 供分页。`interface` 参数也可写作 `iface`。
 

@@ -128,3 +128,30 @@ func TestAccountantRecreatedEntryAndIdleEviction(t *testing.T) {
 		t.Fatalf("idle entry not evicted: %+v", src.deleted)
 	}
 }
+
+func TestSampleKeepsInMemoryUntilPersist(t *testing.T) {
+	src := &fakeSource{samples: map[ebpf.Key]ebpf.Value{devA: {DownBytes: 1000}}}
+	st := &fakeStore{added: map[string]storage.Counters{}}
+	a := NewAccountant(src, st, time.UTC)
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	a.Sample(t0)
+	for i := 1; i <= 3; i++ {
+		src.samples[devA] = ebpf.Value{DownBytes: 1000 + uint64(i)*500}
+		a.Sample(t0.Add(time.Duration(i) * time.Second))
+	}
+	if len(st.added) != 0 {
+		t.Fatalf("Sample wrote to the store: %v", st.added)
+	}
+	if l := a.Live(); len(l) != 1 || l[0].DownloadBps != 500 {
+		t.Fatalf("1s live rate = %+v, want 500 B/s", l)
+	}
+	if err := a.Persist(context.Background(), t0.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.added["2026-01-01|br-lan|aa:00:00:00:00:01"].DownBytes; got != 2500 {
+		t.Fatalf("persisted %d, want 2500", got)
+	}
+	if !a.LastFlush().Equal(t0.Add(3 * time.Second)) {
+		t.Fatalf("last flush %v", a.LastFlush())
+	}
+}

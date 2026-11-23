@@ -81,13 +81,14 @@ func run(configPath string) error {
 	acct := runtime.NewAccountant(col, repo, loc)
 	acctDone := make(chan struct{})
 	go func() {
-		acct.Run(ctx, time.Duration(cfg.FlushInterval)*time.Second)
+		acct.Run(ctx, time.Duration(cfg.LiveInterval)*time.Second, time.Duration(cfg.FlushInterval)*time.Second)
 		close(acctDone)
 	}()
 	go col.Watch(ctx, cfg.Interfaces, nil)
 	go runtime.Housekeep(ctx, repo, loc, cfg.RetentionDays, time.Duration(cfg.HousekeepingInterval)*time.Second, log.Printf)
 
 	srv := apihttp.NewServer(repo, status{acct, col}, loc, time.Duration(cfg.FlushInterval)*time.Second, cfg.Interfaces)
+	srv.LiveInterval = time.Duration(cfg.LiveInterval) * time.Second
 	log.Printf("API listening on %s (days counted in %s)", cfg.BindAddress, loc)
 	err = srv.ListenAndServe(ctx, cfg.BindAddress)
 	stop()
