@@ -1,5 +1,5 @@
 bin/
-traffic-count
-*.o
+/traffic-count
 *.so
 .DS_Store
+.worktrees/

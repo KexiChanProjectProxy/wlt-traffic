@@ -1,166 +1,121 @@
-# traffic-count
+# traffic-count (wlt-traffic)
 
-MAC-level traffic accounting service using eBPF TC (traffic control) classifiers.
+Per-device LAN traffic accounting with eBPF. It is the traffic backend of
+[wlt](https://github.com/KexiChanProjectProxy/wlt): wlt shows each device its
+own usage and gives the admin a ranking.
 
-## What it does
+Chinese documentation: [docs/zh/README.md](docs/zh/README.md).
 
-The service attaches eBPF programs to network interfaces to capture per-MAC ingress/egress byte and packet counters. Counters are periodically flushed to SQLite for persistence.
+## How it counts
+
+Two tc programs are attached to each configured LAN interface (normally the
+LAN bridge, e.g. `br-lan`). Directions are from the **device's** point of view:
+
+| hook on the LAN interface | frame | device identified by | counted as |
+|---|---|---|---|
+| ingress | device → router | Ethernet **source** MAC | upload |
+| egress  | router → device | Ethernet **destination** MAC | download |
+
+- Multicast/broadcast frames are not attributed to any device.
+- Bytes are `skb->len` (L2 frame without FCS); packets use GSO segment counts.
+- Counters are per-CPU (no lost updates) in an LRU hash keyed by
+  `(ifindex, MAC)`; the key has explicit, zeroed padding.
+- The programs return `TC_ACT_UNSPEC`/`TCX_NEXT`, so other TCX programs and
+  legacy tc filters (SQM, ifb redirects) keep running.
+- TCX is used on kernels ≥ 6.6; older kernels fall back to clsact + cls_bpf.
+- When a configured interface is deleted and re-created (bridges often are),
+  the programs are re-attached automatically.
+
+Every `flush_interval` seconds the service reads the counters, subtracts the
+previous reading (kept in memory, since the kernel map lives exactly as long as
+the process) and adds the increase to SQLite under the current **local** day.
+Writes that fail are retried; a final flush runs on shutdown.
+
+Only list the bridge, not its member ports as well, or bridged frames are
+counted twice. Non-Ethernet interfaces (WireGuard, tun) have no MAC addresses
+and are rejected.
 
 ## Build
 
+```sh
+make build      # bin/traffic-count; the BPF object is embedded
+make test
+make e2e        # root: real-kernel test in network namespaces (TCX and tc)
+make generate   # only after editing bpf/traffic.c; needs clang + libbpf-dev
+make deb        # ../traffic-count_<version>_<arch>.deb for this machine
 ```
-make build
-```
-
-This produces `bin/traffic-count`.
-
-Requirements:
-- Go 1.21+
-- clang (for eBPF object generation; without it the service runs in mock mode)
-
-## Run
-
-```
-./bin/traffic-count --config examples/config.json
-```
-
-The service requires root privileges to attach eBPF programs and interrogate network interfaces.
 
 ## Configuration
 
+`/etc/traffic-count/config.json`:
+
 ```json
 {
-  "interfaces": ["eth0", "wg0"],
-  "bind_address": "127.0.0.1:8080",
+  "interfaces": ["br-lan"],
+  "bind_address": "127.0.0.1:8081",
   "database_path": "/var/lib/traffic-count/traffic-count.db",
   "flush_interval": 10,
   "housekeeping_interval": 3600,
-  "log_level": "info",
+  "retention_days": 400,
+  "timezone": "Local",
   "allow_partial": false
 }
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `interfaces` | yes | Interface allowlist. Service attaches to these interfaces only. |
-| `bind_address` | yes | HTTP server bind address. Must be loopback (127.0.0.1, localhost, or ::1). |
-| `database_path` | yes | SQLite database file path. |
-| `flush_interval` | yes | Seconds between counter flushes to SQLite. Must be positive. |
-| `housekeeping_interval` | no | Seconds between housekeeping runs (default 3600). Prunes daily records older than 400 days. |
-| `log_level` | no | One of: debug, info, warn, error (default info). |
-| `allow_partial` | no | Allow degraded mode when some interfaces fail to attach (default false). |
+| key | default | meaning |
+|---|---|---|
+| `interfaces` | (required) | LAN-facing L2 interfaces to count on |
+| `bind_address` | `127.0.0.1:8081` | API address; must be loopback |
+| `database_path` | `/var/lib/traffic-count/traffic-count.db` | SQLite file |
+| `flush_interval` | `10` | seconds between samples / writes |
+| `housekeeping_interval` | `3600` | seconds between prunes of old daily rows |
+| `retention_days` | `400` | daily rows kept; totals are kept forever |
+| `timezone` | `Local` | IANA name (e.g. `Asia/Shanghai`); where a day starts |
+| `allow_partial` | `false` | start even if some interfaces are missing (they attach when they appear) |
+
+Unknown keys are rejected so a typo cannot silently fall back to a default.
 
 ## API
 
-### GET /healthz
+All responses are JSON. `upload` = sent by the device, `download` = received
+by the device. Windows: `today`, `yesterday`, `7days`, `30days`, `month`,
+`lastmonth`, `all`.
 
-Liveness probe. Returns 200 if service is healthy and flush loop is not stale. Returns 503 otherwise.
+| endpoint | purpose |
+|---|---|
+| `GET /healthz` | 200 when all interfaces are attached and flushing works |
+| `GET /api/v1/status` | interfaces (`tcx`/`tc`, errors), last flush, time zone |
+| `GET /api/v1/traffic?window=&mac=&interface=&group=mac&sort=total&limit=&offset=` | ranked rows |
+| `GET /api/v1/summary?mac=` | every window for one device (or all devices) in one call, plus live rate |
+| `GET /api/v1/series?mac=&days=30` | daily points, oldest first, zero-filled |
+| `GET /api/v1/live?mac=` | bytes/s per device over the last interval |
 
-### GET /api/v1/status
-
-Returns service status as JSON.
-
-```json
-{
-  "mode": "healthy",
-  "configured_ifaces": ["eth0", "wg0"],
-  "attached_ifaces": ["eth0", "wg0"],
-  "failed_ifaces": [],
-  "last_flush_timestamp": 1744567800,
-  "flush_error": "",
-  "database_path": "/var/lib/traffic-count/traffic-count.db"
-}
-```
-
-### GET /api/v1/traffic
-
-Query traffic records.
-
-Query parameters:
-- `window` - Time window: `all`, `today`, `7days`, `30days`, `month` (default: today)
-- `interface` - Filter by interface name (optional)
-- `mac` - Filter by MAC address XX:XX:XX:XX:XX:XX (optional)
-- `limit` - Max records to return, 1-1000 (default 100)
-- `offset` - Pagination offset (default 0)
+`/api/v1/traffic` record:
 
 ```json
 {
-  "window": "today",
-  "limit": 100,
-  "offset": 0,
-  "records": [
-    {
-      "interface": "eth0",
-      "ifindex": 2,
-      "mac": "aa:bb:cc:dd:ee:ff",
-      "ingress_bytes": 1234,
-      "egress_bytes": 5678,
-      "total_bytes": 6912,
-      "ingress_packets": 10,
-      "egress_packets": 20,
-      "total_packets": 30,
-      "window": "today"
-    }
-  ]
+  "interface": "br-lan", "mac": "aa:bb:cc:dd:ee:ff",
+  "upload_bytes": 5024590, "download_bytes": 20025790, "total_bytes": 25050380,
+  "upload_packets": 3736, "download_packets": 13892, "total_packets": 17628,
+  "ingress_bytes": 5024590, "egress_bytes": 20025790,
+  "ingress_packets": 3736, "egress_packets": 13892,
+  "last_seen": 1795447871, "window": "today"
 }
 ```
 
-## Service modes
+`ingress_*`/`egress_*` are the same numbers from the interface's point of view
+(ingress = upload, egress = download) for older clients. With `group=mac` a
+device's rows on several interfaces are summed and `interfaces` lists them.
+Rows are sorted by `sort` (`total`, `upload`, `download`, `mac`) and the
+response carries `total_count` for paging. `interface` may also be given as
+`iface`.
 
-| Mode | Condition |
-|------|-----------|
-| healthy | All configured interfaces attached successfully. |
-| degraded | Some interfaces attached, some failed, and `allow_partial=true`. |
-| failed | Zero interfaces attached, OR some failed with `allow_partial=false`. |
+## Upgrading from 1.x
 
-A service in degraded mode continues running. A service in failed mode exits immediately at startup.
-
-## Operational notes
-
-**Flush loop** persists counter deltas to SQLite at the configured interval. On restart, checkpoints are restored to avoid double-counting.
-
-**Housekeeping loop** runs at the configured interval and prunes `mac_traffic_daily` rows older than 400 days (UTC). `mac_traffic_totals` is never pruned.
-
-**Stale flush detection**: If the flush loop has not run successfully within 2x the flush interval, the `/healthz` endpoint returns 503 even if interfaces are healthy.
-
-**Daily UTC windows**: The `today` window uses the current UTC date. `7days` and `30days` are inclusive sliding windows. `month` runs from the first day of the current calendar month to today.
-
-## Limitations
-
-The service is designed for flat L2 interface allowlists. Bridge, VLAN, and bonding topologies are not supported. Dedup semantics across those topologies are undefined.
-
-Mock mode (without clang/eBPF headers) allows full service lifecycle testing but produces no real traffic counters.
-
-## Makefile targets
-
-| Target | Description |
-|--------|-------------|
-| `make build` | Build eBPF objects and Go binary |
-| `make build-ebpf` | Generate eBPF bindings only |
-| `make build-binary` | Build Go binary only |
-| `make test` | Run all tests |
-| `make clean` | Remove build artifacts |
-| `make run` | Build and run the service |
-| `make verify-build-order` | Print build order info |
-| `make verify-layout` | Print key/value layout info |
-
-## File layout
-
-```
-cmd/traffic-count/main.go      # Entry point
-internal/
-  bootstrap/                   # Startup validation
-  config/                      # Configuration loading
-  ebpf/                        # eBPF loader and attachment
-  http/                        # HTTP API server
-  runtime/                     # Service, flush loop, housekeeping
-  storage/                     # SQLite repository
-examples/
-  config.json                  # Example configuration
-  config-loopback.json         # Loopback-only example for testing
-  traffic-count.service        # systemd unit example
-bpf/
-  ingress.c                    # eBPF TC ingress program
-  egress.c                     # eBPF TC egress program
-  shared.h                     # Shared map definitions
-```
+- 1.x ignored every snake_case key in the config file (it parsed without JSON
+  tags), so it listened on `127.0.0.1:8080` with `./traffic-count.db`. 2.x
+  honours the file; check `bind_address` matches wlt's `traffic_api_url`.
+- 1.x data is wrong (directions/devices mixed up, double counting) and is not
+  migrated. New tables `device_traffic_daily` / `device_traffic_total` are
+  created next to the old ones, which are left untouched.
+- Clang, LLVM and libbpf are no longer needed on the target.

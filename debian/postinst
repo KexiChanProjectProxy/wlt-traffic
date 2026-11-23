@@ -3,38 +3,16 @@ set -e
 
 case "$1" in
     configure)
-        ARCH=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
-        echo "Detected architecture: $ARCH"
-
-        # Ensure runtime directories exist
-        mkdir -p /var/lib/traffic-count /run/traffic-count
-
-        # Set include paths for Debian multiarch layout
-        case "$ARCH" in
-            amd64)
-                INC_PATHS="-I/usr/include -I/usr/include/x86_64-linux-gnu -I/usr/include/asm-generic"
-                ;;
-            arm64)
-                INC_PATHS="-I/usr/include -I/usr/include/aarch64-linux-gnu -I/usr/include/asm-generic"
-                ;;
-            *)
-                INC_PATHS="-I/usr/include -I/usr/include/asm-generic"
-                ;;
-        esac
-
-        # Compile eBPF program on target system
-        if command -v clang >/dev/null 2>&1; then
-            echo "Compiling eBPF programs for traffic-count..."
-            clang -target bpf -c -O2 -g $INC_PATHS \
-                -o /usr/lib/traffic-count/traffic_count_bpfel.o \
-                /usr/lib/traffic-count/bpf/ingress.c 2>&1 || {
-                echo "WARNING: eBPF compilation failed, traffic-count will run in mock mode" >&2
-            }
-            echo "eBPF programs compiled successfully"
-        else
-            echo "WARNING: clang not found, traffic-count will run in mock mode" >&2
+        mkdir -p /var/lib/traffic-count
+        # The BPF object is embedded in /usr/bin/traffic-count; nothing to compile.
+        rm -f /usr/lib/traffic-count/traffic_count_bpfel.o
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload >/dev/null 2>&1 || true
+            if systemctl is-enabled --quiet traffic-count 2>/dev/null; then
+                systemctl restart traffic-count || true
+            fi
         fi
-    ;;
+        ;;
 esac
 
 exit 0

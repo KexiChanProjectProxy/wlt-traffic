@@ -1,643 +1,344 @@
-// Package storage provides SQLite persistence for MAC traffic accounting.
+// Package storage persists per-device traffic in SQLite.
+//
+// Two tables are kept:
+//
+//	device_traffic_daily  one row per (local day, interface, MAC)
+//	device_traffic_total  one row per (interface, MAC), never pruned
+//
+// Counters are "up" (sent by the device) and "down" (received by the device).
+// Tables from schema v1 (mac_traffic_*, collector_checkpoints) are left in
+// place untouched; their direction/attribution was wrong, so they are not
+// migrated.
 package storage
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// MAC record keys.
-type RecordKey struct {
-	InterfaceName string
-	Ifindex       uint32
-	MAC           [6]byte
+// Counters are byte/packet counts from the device's point of view.
+type Counters struct {
+	UpBytes     uint64 `json:"upload_bytes"`
+	UpPackets   uint64 `json:"upload_packets"`
+	DownBytes   uint64 `json:"download_bytes"`
+	DownPackets uint64 `json:"download_packets"`
 }
 
-// MAC traffic counters.
-type TrafficCounters struct {
-	Bytes          uint64
-	Packets        uint64
-	IngressBytes   uint64
-	IngressPackets uint64
-	EgressBytes    uint64
-	EgressPackets  uint64
+func (c Counters) Add(o Counters) Counters {
+	return Counters{c.UpBytes + o.UpBytes, c.UpPackets + o.UpPackets, c.DownBytes + o.DownBytes, c.DownPackets + o.DownPackets}
 }
 
-// Daily record for UTC daily bucket.
-type DailyRecord struct {
-	Key
-	DateUTC        string
-	Bytes          uint64
-	Packets        uint64
-	IngressBytes   uint64
-	IngressPackets uint64
-	EgressBytes    uint64
-	EgressPackets  uint64
+func (c Counters) IsZero() bool { return c == Counters{} }
+
+// Delta is traffic to add for one device on one interface on one local day.
+type Delta struct {
+	Day      string // YYYY-MM-DD in the configured time zone
+	Iface    string
+	MAC      string // aa:bb:cc:dd:ee:ff
+	Counters Counters
 }
 
-// Total record for all-time totals.
-type TotalRecord struct {
-	Key
-	Bytes          uint64
-	Packets        uint64
-	IngressBytes   uint64
-	IngressPackets uint64
-	EgressBytes    uint64
-	EgressPackets  uint64
-}
-
-// Checkpoint record for collector state recovery.
-type Checkpoint struct {
-	Key
-	DateUTC            string
-	LastRawBytes       uint64
-	LastRawPackets     uint64
-	LastIngressBytes   uint64
-	LastIngressPackets uint64
-	LastEgressBytes    uint64
-	LastEgressPackets  uint64
-}
-
-// Key embeds RecordKey for embedding in records.
-type Key struct {
-	InterfaceName string
-	Ifindex       uint32
-	MAC           [6]byte
-}
-
-// Repository provides SQLite persistence operations.
+// Repository wraps the SQLite database.
 type Repository struct {
 	db *sql.DB
 }
 
-// New creates a new Repository with the given SQLite file path.
-func New(dbPath string) (*Repository, error) {
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+// New opens (and if needed creates) the database.
+func New(path string) (*Repository, error) {
+	db, err := sql.Open("sqlite3", "file:"+path+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL")
 	if err != nil {
-		return nil, fmt.Errorf("opening database: %w", err)
+		return nil, fmt.Errorf("open database: %w", err)
 	}
-
-	// Enable foreign keys and WAL mode pragmas.
-	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+	db.SetMaxOpenConns(1) // SQLite: one writer; avoids SQLITE_BUSY between our own goroutines
+	r := &Repository{db: db}
+	if err := r.migrate(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("enabling foreign keys: %w", err)
+		return nil, err
 	}
-
-	repo := &Repository{db: db}
-	if err := repo.initSchema(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("initializing schema: %w", err)
-	}
-
-	return repo, nil
+	return r, nil
 }
 
-// Close closes the database connection.
-func (r *Repository) Close() error {
-	return r.db.Close()
-}
+func (r *Repository) Close() error { return r.db.Close() }
 
-// DB returns the underlying database handle for testing purposes.
-func (r *Repository) DB() *sql.DB {
-	return r.db
-}
-
-// initSchema creates all required tables and indexes.
-func (r *Repository) initSchema() error {
-	tx, err := r.db.Begin()
-	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+func (r *Repository) migrate() error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS device_traffic_daily (
+			day          TEXT    NOT NULL,
+			iface        TEXT    NOT NULL,
+			mac          TEXT    NOT NULL,
+			up_bytes     INTEGER NOT NULL DEFAULT 0,
+			up_packets   INTEGER NOT NULL DEFAULT 0,
+			down_bytes   INTEGER NOT NULL DEFAULT 0,
+			down_packets INTEGER NOT NULL DEFAULT 0,
+			updated_at   INTEGER NOT NULL,
+			PRIMARY KEY (day, iface, mac)
+		) WITHOUT ROWID`,
+		`CREATE INDEX IF NOT EXISTS idx_daily_mac_day ON device_traffic_daily(mac, day)`,
+		`CREATE TABLE IF NOT EXISTS device_traffic_total (
+			iface        TEXT    NOT NULL,
+			mac          TEXT    NOT NULL,
+			up_bytes     INTEGER NOT NULL DEFAULT 0,
+			up_packets   INTEGER NOT NULL DEFAULT 0,
+			down_bytes   INTEGER NOT NULL DEFAULT 0,
+			down_packets INTEGER NOT NULL DEFAULT 0,
+			first_seen   INTEGER NOT NULL,
+			last_seen    INTEGER NOT NULL,
+			PRIMARY KEY (iface, mac)
+		) WITHOUT ROWID`,
 	}
-	defer tx.Rollback()
-
-	// mac_traffic_totals: all-time totals unique on (interface_name, ifindex, mac).
-	if _, err := tx.Exec(`
-		CREATE TABLE IF NOT EXISTS mac_traffic_totals (
-			interface_name TEXT NOT NULL,
-			ifindex         INTEGER NOT NULL,
-			mac             BLOB NOT NULL,
-			bytes           INTEGER NOT NULL DEFAULT 0,
-			packets         INTEGER NOT NULL DEFAULT 0,
-			ingress_bytes   INTEGER NOT NULL DEFAULT 0,
-			ingress_packets INTEGER NOT NULL DEFAULT 0,
-			egress_bytes    INTEGER NOT NULL DEFAULT 0,
-			egress_packets  INTEGER NOT NULL DEFAULT 0,
-			updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
-			PRIMARY KEY (interface_name, ifindex, mac)
-		) WITHOUT ROWID
-	`); err != nil {
-		return fmt.Errorf("creating mac_traffic_totals: %w", err)
+	for _, s := range stmts {
+		if _, err := r.db.Exec(s); err != nil {
+			return fmt.Errorf("migrate schema: %w", err)
+		}
 	}
-
-	// mac_traffic_daily: UTC daily buckets unique on (interface_name, ifindex, mac, date_utc).
-	if _, err := tx.Exec(`
-		CREATE TABLE IF NOT EXISTS mac_traffic_daily (
-			interface_name  TEXT NOT NULL,
-			ifindex         INTEGER NOT NULL,
-			mac             BLOB NOT NULL,
-			date_utc        TEXT NOT NULL,
-			bytes           INTEGER NOT NULL DEFAULT 0,
-			packets         INTEGER NOT NULL DEFAULT 0,
-			ingress_bytes   INTEGER NOT NULL DEFAULT 0,
-			ingress_packets INTEGER NOT NULL DEFAULT 0,
-			egress_bytes    INTEGER NOT NULL DEFAULT 0,
-			egress_packets  INTEGER NOT NULL DEFAULT 0,
-			updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
-			PRIMARY KEY (interface_name, ifindex, mac, date_utc)
-		) WITHOUT ROWID
-	`); err != nil {
-		return fmt.Errorf("creating mac_traffic_daily: %w", err)
-	}
-
-	// collector_checkpoints: last-seen raw counter values for crash-safe recovery.
-	if _, err := tx.Exec(`
-		CREATE TABLE IF NOT EXISTS collector_checkpoints (
-			interface_name       TEXT NOT NULL,
-			ifindex              INTEGER NOT NULL,
-			mac                  BLOB NOT NULL,
-			date_utc             TEXT NOT NULL,
-			last_raw_bytes       INTEGER NOT NULL DEFAULT 0,
-			last_raw_packets     INTEGER NOT NULL DEFAULT 0,
-			last_ingress_bytes       INTEGER NOT NULL DEFAULT 0,
-			last_ingress_packets     INTEGER NOT NULL DEFAULT 0,
-			last_egress_bytes        INTEGER NOT NULL DEFAULT 0,
-			last_egress_packets      INTEGER NOT NULL DEFAULT 0,
-			updated_at           TEXT NOT NULL DEFAULT (datetime('now')),
-			PRIMARY KEY (interface_name, ifindex, mac)
-		) WITHOUT ROWID
-	`); err != nil {
-		return fmt.Errorf("creating collector_checkpoints: %w", err)
-	}
-
-	// Index on date_utc for pruning cutoffs.
-	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_daily_date_utc ON mac_traffic_daily(date_utc)`); err != nil {
-		return fmt.Errorf("creating idx_daily_date_utc: %w", err)
-	}
-
-	// Index on interface_name for filtered queries.
-	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_totals_interface ON mac_traffic_totals(interface_name)`); err != nil {
-		return fmt.Errorf("creating idx_totals_interface: %w", err)
-	}
-
-	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_daily_interface ON mac_traffic_daily(interface_name)`); err != nil {
-		return fmt.Errorf("creating idx_daily_interface: %w", err)
-	}
-
-	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_checkpoints_interface ON collector_checkpoints(interface_name)`); err != nil {
-		return fmt.Errorf("creating idx_checkpoints_interface: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing schema: %w", err)
-	}
-
 	return nil
 }
 
-// UpsertDaily upserts a daily bucket record, accumulating counters on conflict.
-func (r *Repository) UpsertDaily(ctx context.Context, key *RecordKey, dateUTC string, delta *TrafficCounters) error {
+// sqlite cannot bind uint64 values above MaxInt64.
+func i64(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(v)
+}
+
+// AddDeltas adds all deltas to the daily and total tables in one transaction.
+func (r *Repository) AddDeltas(ctx context.Context, deltas []Delta, now time.Time) error {
+	if len(deltas) == 0 {
+		return nil
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+		return fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback()
 
-	query := `
-		INSERT INTO mac_traffic_daily (interface_name, ifindex, mac, date_utc, bytes, packets, ingress_bytes, ingress_packets, egress_bytes, egress_packets)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(interface_name, ifindex, mac, date_utc) DO UPDATE SET
-			bytes           = bytes           + excluded.bytes,
-			packets         = packets         + excluded.packets,
-			ingress_bytes   = ingress_bytes   + excluded.ingress_bytes,
-			ingress_packets = ingress_packets + excluded.ingress_packets,
-			egress_bytes    = egress_bytes    + excluded.egress_bytes,
-			egress_packets  = egress_packets  + excluded.egress_packets,
-			updated_at      = datetime('now')
-	`
-
-	_, err = tx.ExecContext(ctx, query,
-		key.InterfaceName,
-		key.Ifindex,
-		key.MAC[:],
-		dateUTC,
-		delta.Bytes,
-		delta.Packets,
-		delta.IngressBytes,
-		delta.IngressPackets,
-		delta.EgressBytes,
-		delta.EgressPackets,
-	)
+	daily, err := tx.PrepareContext(ctx, `
+		INSERT INTO device_traffic_daily (day, iface, mac, up_bytes, up_packets, down_bytes, down_packets, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(day, iface, mac) DO UPDATE SET
+			up_bytes     = up_bytes     + excluded.up_bytes,
+			up_packets   = up_packets   + excluded.up_packets,
+			down_bytes   = down_bytes   + excluded.down_bytes,
+			down_packets = down_packets + excluded.down_packets,
+			updated_at   = excluded.updated_at`)
 	if err != nil {
-		return fmt.Errorf("upserting daily record: %w", err)
+		return err
 	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing daily upsert: %w", err)
+	defer daily.Close()
+	total, err := tx.PrepareContext(ctx, `
+		INSERT INTO device_traffic_total (iface, mac, up_bytes, up_packets, down_bytes, down_packets, first_seen, last_seen)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(iface, mac) DO UPDATE SET
+			up_bytes     = up_bytes     + excluded.up_bytes,
+			up_packets   = up_packets   + excluded.up_packets,
+			down_bytes   = down_bytes   + excluded.down_bytes,
+			down_packets = down_packets + excluded.down_packets,
+			last_seen    = excluded.last_seen`)
+	if err != nil {
+		return err
 	}
+	defer total.Close()
 
-	return nil
+	ts := now.Unix()
+	for _, d := range deltas {
+		c := d.Counters
+		if _, err := daily.ExecContext(ctx, d.Day, d.Iface, d.MAC, i64(c.UpBytes), i64(c.UpPackets), i64(c.DownBytes), i64(c.DownPackets), ts); err != nil {
+			return fmt.Errorf("upsert daily: %w", err)
+		}
+		if _, err := total.ExecContext(ctx, d.Iface, d.MAC, i64(c.UpBytes), i64(c.UpPackets), i64(c.DownBytes), i64(c.DownPackets), ts, ts); err != nil {
+			return fmt.Errorf("upsert total: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
-// UpsertTotal upserts an all-time totals record, accumulating counters on conflict.
-func (r *Repository) UpsertTotal(ctx context.Context, key *RecordKey, delta *TrafficCounters) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	query := `
-		INSERT INTO mac_traffic_totals (interface_name, ifindex, mac, bytes, packets, ingress_bytes, ingress_packets, egress_bytes, egress_packets)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(interface_name, ifindex, mac) DO UPDATE SET
-			bytes           = bytes           + excluded.bytes,
-			packets         = packets         + excluded.packets,
-			ingress_bytes   = ingress_bytes   + excluded.ingress_bytes,
-			ingress_packets = ingress_packets + excluded.ingress_packets,
-			egress_bytes    = egress_bytes    + excluded.egress_bytes,
-			egress_packets  = egress_packets  + excluded.egress_packets,
-			updated_at      = datetime('now')
-	`
-
-	_, err = tx.ExecContext(ctx, query,
-		key.InterfaceName,
-		key.Ifindex,
-		key.MAC[:],
-		delta.Bytes,
-		delta.Packets,
-		delta.IngressBytes,
-		delta.IngressPackets,
-		delta.EgressBytes,
-		delta.EgressPackets,
-	)
-	if err != nil {
-		return fmt.Errorf("upserting total record: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing total upsert: %w", err)
-	}
-
-	return nil
+// Query selects traffic for a day range, or all-time when From is empty.
+type Query struct {
+	From, To   string // inclusive YYYY-MM-DD; both empty = all time
+	MAC        string
+	Iface      string
+	GroupByMAC bool   // sum a device's traffic over all interfaces
+	Sort       string // "total" (default), "upload", "download", "mac"
+	Limit      int
+	Offset     int
 }
 
-// UpsertCheckpoint upserts collector checkpoint for a key.
-func (r *Repository) UpsertCheckpoint(ctx context.Context, key *RecordKey, dateUTC string, raw *TrafficCounters) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	query := `
-		INSERT INTO collector_checkpoints (interface_name, ifindex, mac, date_utc, last_raw_bytes, last_raw_packets, last_ingress_bytes, last_ingress_packets, last_egress_bytes, last_egress_packets)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(interface_name, ifindex, mac) DO UPDATE SET
-			date_utc               = excluded.date_utc,
-			last_raw_bytes         = excluded.last_raw_bytes,
-			last_raw_packets       = excluded.last_raw_packets,
-			last_ingress_bytes     = excluded.last_ingress_bytes,
-			last_ingress_packets   = excluded.last_ingress_packets,
-			last_egress_bytes      = excluded.last_egress_bytes,
-			last_egress_packets    = excluded.last_egress_packets,
-			updated_at             = datetime('now')
-	`
-
-	_, err = tx.ExecContext(ctx, query,
-		key.InterfaceName,
-		key.Ifindex,
-		key.MAC[:],
-		dateUTC,
-		raw.Bytes,
-		raw.Packets,
-		raw.IngressBytes,
-		raw.IngressPackets,
-		raw.EgressBytes,
-		raw.EgressPackets,
-	)
-	if err != nil {
-		return fmt.Errorf("upserting checkpoint: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing checkpoint: %w", err)
-	}
-
-	return nil
+// Row is one result of a Query.
+type Row struct {
+	Iface    string   `json:"interface"`
+	Ifaces   []string `json:"interfaces,omitempty"`
+	MAC      string   `json:"mac"`
+	Counters Counters `json:"-"`
+	LastSeen int64    `json:"last_seen"`
 }
 
-// GetCheckpoint retrieves the last checkpoint for a key, or nil if none exists.
-func (r *Repository) GetCheckpoint(ctx context.Context, key *RecordKey) (*Checkpoint, error) {
-	query := `
-		SELECT interface_name, ifindex, mac, date_utc, last_raw_bytes, last_raw_packets,
-		       last_ingress_bytes, last_ingress_packets, last_egress_bytes, last_egress_packets
-		FROM collector_checkpoints
-		WHERE interface_name = ? AND ifindex = ? AND mac = ?
-	`
-
-	var cp Checkpoint
-	var macBlob []byte
-
-	err := r.db.QueryRowContext(ctx, query, key.InterfaceName, key.Ifindex, key.MAC[:]).Scan(
-		&cp.InterfaceName,
-		&cp.Ifindex,
-		&macBlob,
-		&cp.DateUTC,
-		&cp.LastRawBytes,
-		&cp.LastRawPackets,
-		&cp.LastIngressBytes,
-		&cp.LastIngressPackets,
-		&cp.LastEgressBytes,
-		&cp.LastEgressPackets,
+// QueryTraffic returns matching rows sorted as requested plus the number of
+// rows before LIMIT/OFFSET.
+func (r *Repository) QueryTraffic(ctx context.Context, q Query) ([]Row, int, error) {
+	var (
+		table, lastSeen string
+		where           []string
+		args            []any
 	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("querying checkpoint: %w", err)
-	}
-
-	copy(cp.MAC[:], macBlob)
-	return &cp, nil
-}
-
-// GetDaily retrieves a daily record for a key and date.
-func (r *Repository) GetDaily(ctx context.Context, key *RecordKey, dateUTC string) (*DailyRecord, error) {
-	query := `
-		SELECT interface_name, ifindex, mac, date_utc, bytes, packets, ingress_bytes, ingress_packets, egress_bytes, egress_packets
-		FROM mac_traffic_daily
-		WHERE interface_name = ? AND ifindex = ? AND mac = ? AND date_utc = ?
-	`
-
-	var dr DailyRecord
-	var macBlob []byte
-
-	err := r.db.QueryRowContext(ctx, query, key.InterfaceName, key.Ifindex, key.MAC[:], dateUTC).Scan(
-		&dr.InterfaceName,
-		&dr.Ifindex,
-		&macBlob,
-		&dr.DateUTC,
-		&dr.Bytes,
-		&dr.Packets,
-		&dr.IngressBytes,
-		&dr.IngressPackets,
-		&dr.EgressBytes,
-		&dr.EgressPackets,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("querying daily record: %w", err)
-	}
-
-	copy(dr.MAC[:], macBlob)
-	return &dr, nil
-}
-
-// GetTotal retrieves an all-time total for a key.
-func (r *Repository) GetTotal(ctx context.Context, key *RecordKey) (*TotalRecord, error) {
-	query := `
-		SELECT interface_name, ifindex, mac, bytes, packets, ingress_bytes, ingress_packets, egress_bytes, egress_packets
-		FROM mac_traffic_totals
-		WHERE interface_name = ? AND ifindex = ? AND mac = ?
-	`
-
-	var tr TotalRecord
-	var macBlob []byte
-
-	err := r.db.QueryRowContext(ctx, query, key.InterfaceName, key.Ifindex, key.MAC[:]).Scan(
-		&tr.InterfaceName,
-		&tr.Ifindex,
-		&macBlob,
-		&tr.Bytes,
-		&tr.Packets,
-		&tr.IngressBytes,
-		&tr.IngressPackets,
-		&tr.EgressBytes,
-		&tr.EgressPackets,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("querying total record: %w", err)
-	}
-
-	copy(tr.MAC[:], macBlob)
-	return &tr, nil
-}
-
-// ListDaily records for a date range (inclusive) with optional interface filter.
-func (r *Repository) ListDaily(ctx context.Context, dateStart, dateEnd, interfaceFilter string) ([]DailyRecord, error) {
-	var query string
-	var args []interface{}
-
-	if interfaceFilter != "" {
-		query = `
-			SELECT interface_name, ifindex, mac, date_utc, bytes, packets, ingress_bytes, ingress_packets, egress_bytes, egress_packets
-			FROM mac_traffic_daily
-			WHERE interface_name = ? AND date_utc >= ? AND date_utc <= ?
-			ORDER BY interface_name, ifindex, mac, date_utc
-		`
-		args = []interface{}{interfaceFilter, dateStart, dateEnd}
+	if q.From == "" && q.To == "" {
+		table, lastSeen = "device_traffic_total", "last_seen"
 	} else {
-		query = `
-			SELECT interface_name, ifindex, mac, date_utc, bytes, packets, ingress_bytes, ingress_packets, egress_bytes, egress_packets
-			FROM mac_traffic_daily
-			WHERE date_utc >= ? AND date_utc <= ?
-			ORDER BY interface_name, ifindex, mac, date_utc
-		`
-		args = []interface{}{dateStart, dateEnd}
+		table, lastSeen = "device_traffic_daily", "updated_at"
+		where = append(where, "day >= ?", "day <= ?")
+		args = append(args, q.From, q.To)
+	}
+	if q.MAC != "" {
+		where = append(where, "mac = ?")
+		args = append(args, strings.ToLower(q.MAC))
+	}
+	if q.Iface != "" {
+		where = append(where, "iface = ?")
+		args = append(args, q.Iface)
+	}
+	group, ifaceCol := "iface, mac", "iface"
+	if q.GroupByMAC {
+		group, ifaceCol = "mac", "group_concat(DISTINCT iface)"
+	}
+	order := "total DESC, mac"
+	switch q.Sort {
+	case "upload":
+		order = "up DESC, mac"
+	case "download":
+		order = "down DESC, mac"
+	case "mac":
+		order = "mac"
+	}
+	if !q.GroupByMAC {
+		order += ", iface"
+	}
+	sqlText := fmt.Sprintf(`
+		SELECT %s, mac,
+		       SUM(up_bytes) AS up, SUM(up_packets), SUM(down_bytes) AS down, SUM(down_packets),
+		       SUM(up_bytes) + SUM(down_bytes) AS total, MAX(%s),
+		       COUNT(*) OVER ()
+		FROM %s`, ifaceCol, lastSeen, table)
+	if len(where) > 0 {
+		sqlText += " WHERE " + strings.Join(where, " AND ")
+	}
+	sqlText += " GROUP BY " + group + " ORDER BY " + order
+	if q.Limit > 0 {
+		sqlText += " LIMIT ? OFFSET ?"
+		args = append(args, q.Limit, q.Offset)
 	}
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
-		return nil, fmt.Errorf("listing daily records: %w", err)
+		return nil, 0, fmt.Errorf("query traffic: %w", err)
 	}
 	defer rows.Close()
-
-	var records []DailyRecord
-	for rows.Next() {
-		var dr DailyRecord
-		var macBlob []byte
-
-		if err := rows.Scan(
-			&dr.InterfaceName,
-			&dr.Ifindex,
-			&macBlob,
-			&dr.DateUTC,
-			&dr.Bytes,
-			&dr.Packets,
-			&dr.IngressBytes,
-			&dr.IngressPackets,
-			&dr.EgressBytes,
-			&dr.EgressPackets,
-		); err != nil {
-			return nil, fmt.Errorf("scanning daily record: %w", err)
-		}
-
-		copy(dr.MAC[:], macBlob)
-		records = append(records, dr)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating daily rows: %w", err)
-	}
-
-	return records, nil
-}
-
-// ListTotals returns all all-time totals with optional interface filter.
-func (r *Repository) ListTotals(ctx context.Context, interfaceFilter string) ([]TotalRecord, error) {
-	var query string
-	var args []interface{}
-
-	if interfaceFilter != "" {
-		query = `
-			SELECT interface_name, ifindex, mac, bytes, packets, ingress_bytes, ingress_packets, egress_bytes, egress_packets
-			FROM mac_traffic_totals
-			WHERE interface_name = ?
-			ORDER BY interface_name, ifindex, mac
-		`
-		args = []interface{}{interfaceFilter}
-	} else {
-		query = `
-			SELECT interface_name, ifindex, mac, bytes, packets, ingress_bytes, ingress_packets, egress_bytes, egress_packets
-			FROM mac_traffic_totals
-			ORDER BY interface_name, ifindex, mac
-		`
-	}
-
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("listing totals: %w", err)
-	}
-	defer rows.Close()
-
-	var records []TotalRecord
-	for rows.Next() {
-		var tr TotalRecord
-		var macBlob []byte
-
-		if err := rows.Scan(
-			&tr.InterfaceName,
-			&tr.Ifindex,
-			&macBlob,
-			&tr.Bytes,
-			&tr.Packets,
-			&tr.IngressBytes,
-			&tr.IngressPackets,
-			&tr.EgressBytes,
-			&tr.EgressPackets,
-		); err != nil {
-			return nil, fmt.Errorf("scanning total record: %w", err)
-		}
-
-		copy(tr.MAC[:], macBlob)
-		records = append(records, tr)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating total rows: %w", err)
-	}
-
-	return records, nil
-}
-
-// PruneDaily removes daily records older than the cutoff date (UTC).
-func (r *Repository) PruneDaily(ctx context.Context, cutoffDateUTC string) (int64, error) {
-	result, err := r.db.ExecContext(ctx,
-		`DELETE FROM mac_traffic_daily WHERE date_utc < ?`,
-		cutoffDateUTC,
+	var (
+		out   []Row
+		count int
 	)
-	if err != nil {
-		return 0, fmt.Errorf("pruning daily records: %w", err)
+	for rows.Next() {
+		var (
+			row             Row
+			ifaces          sql.NullString
+			up, upP, dn, dP int64
+			tot             int64
+		)
+		if err := rows.Scan(&ifaces, &row.MAC, &up, &upP, &dn, &dP, &tot, &row.LastSeen, &count); err != nil {
+			return nil, 0, err
+		}
+		row.Counters = Counters{uint64(up), uint64(upP), uint64(dn), uint64(dP)}
+		if q.GroupByMAC {
+			row.Ifaces = strings.Split(ifaces.String, ",")
+		} else {
+			row.Iface = ifaces.String
+		}
+		out = append(out, row)
 	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("getting rows affected: %w", err)
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
 	}
-
-	return rowsAffected, nil
+	if len(out) == 0 && q.Offset > 0 && q.Limit > 0 {
+		// COUNT(*) OVER () is only visible when a row comes back.
+		if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM (SELECT 1 FROM "+table+
+			whereClause(where)+" GROUP BY "+group+")", args[:len(args)-2]...).Scan(&count); err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, count, nil
 }
 
-// ListCheckpoints returns all checkpoints with optional interface filter.
-func (r *Repository) ListCheckpoints(ctx context.Context, interfaceFilter string) ([]Checkpoint, error) {
-	var query string
-	var args []interface{}
-
-	if interfaceFilter != "" {
-		query = `
-			SELECT interface_name, ifindex, mac, date_utc, last_raw_bytes, last_raw_packets,
-			       last_ingress_bytes, last_ingress_packets, last_egress_bytes, last_egress_packets
-			FROM collector_checkpoints
-			WHERE interface_name = ?
-			ORDER BY interface_name, ifindex, mac
-		`
-		args = []interface{}{interfaceFilter}
-	} else {
-		query = `
-			SELECT interface_name, ifindex, mac, date_utc, last_raw_bytes, last_raw_packets,
-			       last_ingress_bytes, last_ingress_packets, last_egress_bytes, last_egress_packets
-			FROM collector_checkpoints
-			ORDER BY interface_name, ifindex, mac
-		`
+func whereClause(where []string) string {
+	if len(where) == 0 {
+		return ""
 	}
+	return " WHERE " + strings.Join(where, " AND ")
+}
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+// DayPoint is one day of a series.
+type DayPoint struct {
+	Day      string   `json:"date"`
+	Counters Counters `json:"-"`
+}
+
+// Series returns per-day sums between from and to (inclusive), with a zero
+// entry for days without traffic. An empty mac sums all devices.
+func (r *Repository) Series(ctx context.Context, mac, iface, from, to string) ([]DayPoint, error) {
+	where := []string{"day >= ?", "day <= ?"}
+	args := []any{from, to}
+	if mac != "" {
+		where = append(where, "mac = ?")
+		args = append(args, strings.ToLower(mac))
+	}
+	if iface != "" {
+		where = append(where, "iface = ?")
+		args = append(args, iface)
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT day, SUM(up_bytes), SUM(up_packets), SUM(down_bytes), SUM(down_packets)
+		FROM device_traffic_daily`+whereClause(where)+` GROUP BY day ORDER BY day`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("listing checkpoints: %w", err)
+		return nil, fmt.Errorf("query series: %w", err)
 	}
 	defer rows.Close()
-
-	var checkpoints []Checkpoint
+	got := map[string]Counters{}
 	for rows.Next() {
-		var cp Checkpoint
-		var macBlob []byte
-
-		if err := rows.Scan(
-			&cp.InterfaceName,
-			&cp.Ifindex,
-			&macBlob,
-			&cp.DateUTC,
-			&cp.LastRawBytes,
-			&cp.LastRawPackets,
-			&cp.LastIngressBytes,
-			&cp.LastIngressPackets,
-			&cp.LastEgressBytes,
-			&cp.LastEgressPackets,
-		); err != nil {
-			return nil, fmt.Errorf("scanning checkpoint: %w", err)
+		var day string
+		var a, b, c, d int64
+		if err := rows.Scan(&day, &a, &b, &c, &d); err != nil {
+			return nil, err
 		}
-
-		copy(cp.MAC[:], macBlob)
-		checkpoints = append(checkpoints, cp)
+		got[day] = Counters{uint64(a), uint64(b), uint64(c), uint64(d)}
 	}
-
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating checkpoint rows: %w", err)
+		return nil, err
 	}
-
-	return checkpoints, nil
+	start, err := time.Parse(time.DateOnly, from)
+	if err != nil {
+		return nil, err
+	}
+	end, err := time.Parse(time.DateOnly, to)
+	if err != nil {
+		return nil, err
+	}
+	var out []DayPoint
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		day := d.Format(time.DateOnly)
+		out = append(out, DayPoint{Day: day, Counters: got[day]})
+	}
+	return out, nil
 }
 
-// CurrentDateUTC returns the current date in UTC as YYYY-MM-DD.
-func CurrentDateUTC() string {
-	return time.Now().UTC().Format("2006-01-02")
-}
-
-// FormatDateUTC formats a time.Time as YYYY-MM-DD in UTC.
-func FormatDateUTC(t time.Time) string {
-	return t.UTC().Format("2006-01-02")
-}
-
-// PruneCutoffDate returns the cutoff date for retention pruning (400 days ago UTC).
-func PruneCutoffDate() string {
-	return time.Now().UTC().AddDate(0, 0, -400).Format("2006-01-02")
+// PruneDaily deletes daily rows before the given day.
+func (r *Repository) PruneDaily(ctx context.Context, before string) (int64, error) {
+	res, err := r.db.ExecContext(ctx, `DELETE FROM device_traffic_daily WHERE day < ?`, before)
+	if err != nil {
+		return 0, fmt.Errorf("prune daily: %w", err)
+	}
+	return res.RowsAffected()
 }
