@@ -1,8 +1,10 @@
 {
-  "interfaces": ["eth0", "wg0"],
-  "bind_address": "127.0.0.1:8080",
+  "interfaces": ["br-lan"],
+  "bind_address": "127.0.0.1:8081",
   "database_path": "/var/lib/traffic-count/traffic-count.db",
   "flush_interval": 10,
-  "log_level": "info",
+  "housekeeping_interval": 3600,
+  "retention_days": 400,
+  "timezone": "Local",
   "allow_partial": false
 }

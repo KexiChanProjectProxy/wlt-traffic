@@ -1,3 +1,21 @@
+traffic-count (2.0.0) stable; urgency=medium
+
+  * Count per device from the LAN device's point of view: upload is keyed on
+    the Ethernet source of ingress frames, download on the destination of
+    egress frames. Previously the router's own MAC absorbed most traffic.
+  * Per-CPU LRU counters with a zeroed key; no lost updates, no padding junk.
+  * In-memory baseline instead of SQLite checkpoints: no double counting after
+    midnight or restarts, no uint64 wrap-around.
+  * Days follow the configured time zone; interface names are recorded.
+  * Re-attach automatically when an interface is re-created; fall back to
+    clsact/cls_bpf on kernels without TCX; never short-circuit other tc users.
+  * BPF object embedded in the binary; no clang/libbpf needed on the target.
+  * Config keys are snake_case as documented (they were silently ignored).
+  * New API: sorted /api/v1/traffic, /api/v1/summary, /api/v1/series,
+    /api/v1/live. New SQLite tables; v1 tables are left untouched.
+
+ -- KexiChan Project <kexi@example.com>  Mon, 23 Nov 2026 00:00:00 +0000
+
 traffic-count (1.0.0) stable; urgency=medium
 
   * Initial release with eBPF-based traffic accounting
