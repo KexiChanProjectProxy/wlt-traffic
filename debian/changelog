@@ -1,3 +1,12 @@
+traffic-count (2.1.0) stable; urgency=medium
+
+  * Sample the BPF counters every live_interval (new config key, default
+    1 s) for /api/v1/live; the database is still written every
+    flush_interval (10 s), so there are no extra writes.
+  * /api/v1/live reports the live interval instead of the last flush time.
+
+ -- KexiChan Project <kexi@example.com>  Tue, 24 Nov 2026 00:00:00 +0000
+
 traffic-count (2.0.0) stable; urgency=medium
 
   * Count per device from the LAN device's point of view: upload is keyed on
